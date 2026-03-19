@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     # App
     APP_ENV: str = "development"
-    SECRET_KEY: str = "change-this-secret"
+    SECRET_KEY: str = "67f40cc44ea433a3b92156d8d2d0b45888b2b23d1898a3c73400f4dbaa45b69a"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
