@@ -1,0 +1,81 @@
+# ── Node.js / React ───────────────────────────────────────────────────────────
+# Dependencies
+node_modules/
+
+# Build artifacts
+build/
+dist/
+/coverage
+
+# Vite cache
+frontend/.vite/
+
+# ── Environment files ─────────────────────────────────────────────────────────
+.env
+.env.*
+.env.local
+.env.*.local
+
+# Frontend production env (contains real URLs — do not commit)
+frontend/.env.production
+frontend/.env.production.local
+
+# ── Python / Backend ──────────────────────────────────────────────────────────
+# Byte-code
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Pip artefacts
+pip-log.txt
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Testing & coverage ────────────────────────────────────────────────────────
+htmlcov/
+.tox/
+.coverage
+.cache
+.pytest_cache/
+
+# ── Database files (never commit) ─────────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+backend/job_agent.db
+
+# ── Upload / generated output folders ────────────────────────────────────────
+backend/uploads/
+backend/output/
+
+# ── Editor / OS ───────────────────────────────────────────────────────────────
+# VS Code (keep useful config, ignore personal settings)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# JetBrains / PyCharm
+.idea/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Windows
+Thumbs.db
+
+# ── Railway / deployment ──────────────────────────────────────────────────────
+.railway/
+
+*.eml
