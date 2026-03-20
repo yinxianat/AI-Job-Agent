@@ -29,6 +29,7 @@ export const API_ENDPOINTS = {
   GENERATOR_RUN:            '/api/resume/batch-start',
   GENERATOR_BATCH_STATUS:   (taskId) => `/api/resume/batch-status/${taskId}`,
   GENERATOR_EXPORT:         (taskId) => `/api/resume/batch-export/${taskId}`,
+  GENERATOR_DOWNLOAD_ZIP:   (taskId) => `/api/resume/batch-download-zip/${taskId}`,
   GENERATOR_PARSE_SHEET:    '/api/jobs/parse-spreadsheet',
 
   // Contact

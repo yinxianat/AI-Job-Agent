@@ -16,14 +16,13 @@ import {
   SearchIcon, MapPinIcon, BriefcaseIcon, CalendarIcon,
   WifiIcon, SlidersHorizontalIcon, RefreshCwIcon,
   SparklesIcon, CheckCircleIcon, XCircleIcon, ClockIcon,
-  DownloadIcon, FileSpreadsheetIcon, FolderOpenIcon,
+  DownloadIcon, FileSpreadsheetIcon,
   ChevronRightIcon, CheckIcon, Loader2Icon, PlusIcon, XIcon,
   StarIcon, BookmarkIcon, TableIcon, AlertCircleIcon,
   ClipboardListIcon, ChevronDownIcon, ChevronUpIcon,
 } from 'lucide-react'
 import api from '../services/api'
 import toast from 'react-hot-toast'
-import FolderPicker           from '../components/FolderPicker'
 import LocationAutocomplete  from '../components/LocationAutocomplete'
 import {
   PRESET_CATEGORIES, DATE_RANGES, WORK_TYPE_OPTIONS, RADIUS_STEPS,
@@ -38,7 +37,6 @@ import {
   RESUME_MAX_FILES,
   JOB_LOG_MAX_FILES,
 } from '../constants/fileTypes'
-import { LOCAL_KEY_OUTPUT_FOLDER } from '../constants/storage'
 
 // ── Local alias — radius options with labels for the generator's pill UI ──────
 const RADIUS_OPTIONS = RADIUS_STEPS.map(v => ({
@@ -100,17 +98,9 @@ export default function ResumeGeneratorPage() {
 
   const [step, setStep] = useState(1)
 
-  // In production the backend runs on Railway — it cannot browse the user's local
-  // filesystem. Folder picker is only shown in local dev mode.
-  const isLocalMode = !import.meta.env.PROD
-
   // ── Step 1 state ──
   const [resumeFiles,   setResumeFiles]   = useState([])   // array of File objects
-  const [outputFolder,  setOutputFolder]  = useState(
-    () => { try { return localStorage.getItem(LOCAL_KEY_OUTPUT_FOLDER) || '' } catch { return '' } }
-  )
   const [homeLocation,  setHomeLocation]  = useState('')
-  const [folderOpen,    setFolderOpen]    = useState(false)
   const [extraSkills,   setExtraSkills]   = useState(incomingProfile)
   const [skillInput,    setSkillInput]    = useState('')
   const [skillTags,     setSkillTags]     = useState(
@@ -378,7 +368,6 @@ export default function ResumeGeneratorPage() {
 
     const formData = new FormData()
     resumeFiles.forEach(f => formData.append('resume_files', f))
-    formData.append('output_folder', outputFolder)
     formData.append('extra_skills', combinedSkills)
     formData.append('home_location', homeLocation)
     formData.append('jobs_json', JSON.stringify(selectedList))
@@ -427,8 +416,28 @@ export default function ResumeGeneratorPage() {
     } catch (err) { toast.error(err.message) }
   }
 
-  const handleDownloadFile = (path) => {
-    window.open(`/api/resume/download?path=${encodeURIComponent(path)}`, '_blank')
+  const handleDownloadZip = async () => {
+    if (!batchTaskId) return
+    try {
+      const res = await api.get(API_ENDPOINTS.GENERATOR_DOWNLOAD_ZIP(batchTaskId), { responseType: 'blob' })
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/zip' }))
+      const a = document.createElement('a'); a.href = url
+      a.download = `resumes_${Date.now()}.zip`; a.click()
+      URL.revokeObjectURL(url)
+      toast.success('ZIP downloaded!')
+    } catch (err) { toast.error(err.message) }
+  }
+
+  const handleDownloadFile = async (path) => {
+    if (!path) return
+    try {
+      const res = await api.get(`/api/resume/download?path=${encodeURIComponent(path)}`, { responseType: 'blob' })
+      const filename = path.split('/').pop() || 'resume'
+      const url = URL.createObjectURL(new Blob([res.data]))
+      const a = document.createElement('a'); a.href = url
+      a.download = filename; a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) { toast.error('Download failed: ' + (err.response?.data?.detail || err.message)) }
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -509,65 +518,6 @@ export default function ResumeGeneratorPage() {
             </div>
           </div>
 
-          {/* Output folder — local dev only */}
-          {isLocalMode ? (
-            <div className="card">
-              <div className="card-header">
-                <h2 className="font-semibold text-gray-800 flex items-center gap-2">
-                  <FolderOpenIcon className="w-4 h-4 text-brand-500" /> Output Folder
-                </h2>
-              </div>
-              <div className="card-body">
-                <div
-                  onClick={() => setFolderOpen(true)}
-                  className={`flex items-center gap-3 p-3 rounded-xl border-2 border-dashed cursor-pointer transition-colors group
-                    ${outputFolder
-                      ? 'border-brand-400 bg-brand-50 hover:bg-brand-100'
-                      : 'border-gray-300 bg-gray-50 hover:border-brand-400 hover:bg-brand-50'}`}
-                >
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors
-                    ${outputFolder ? 'bg-brand-100' : 'bg-gray-200 group-hover:bg-brand-100'}`}>
-                    <FolderOpenIcon className={`w-5 h-5 ${outputFolder ? 'text-yellow-500' : 'text-gray-400 group-hover:text-yellow-500'}`} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    {outputFolder ? (
-                      <>
-                        <p className="text-xs font-medium text-brand-700 mb-0.5">Selected folder</p>
-                        <p className="text-sm font-mono text-gray-800 truncate">{outputFolder}</p>
-                      </>
-                    ) : (
-                      <p className="text-sm font-medium text-gray-600 group-hover:text-brand-700">
-                        Click to choose where to save resumes &amp; cover letters
-                      </p>
-                    )}
-                  </div>
-                  <span className={`shrink-0 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors
-                    ${outputFolder
-                      ? 'bg-brand-100 text-brand-700'
-                      : 'bg-white text-gray-600 border border-gray-300 group-hover:border-brand-400'}`}>
-                    {outputFolder ? 'Change' : 'Browse'}
-                  </span>
-                </div>
-                {outputFolder && (
-                  <p className="mt-2 text-xs text-gray-400">
-                    Files saved as <code className="bg-gray-100 px-1 rounded">JobTitle_Location_Company.pdf/.docx</code> and{' '}
-                    <code className="bg-gray-100 px-1 rounded">CoverLetter_JobTitle_Location_Company.pdf/.docx</code>
-                  </p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="card">
-              <div className="card-body">
-                <div className="flex items-center gap-3 p-3 rounded-xl bg-blue-50 border border-blue-200">
-                  <DownloadIcon className="w-5 h-5 text-blue-500 shrink-0" />
-                  <p className="text-sm text-blue-700">
-                    Generated resumes will be available to <strong>download as a ZIP</strong> after generation completes.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* Home Location */}
           <div className="card">
@@ -1281,7 +1231,6 @@ export default function ResumeGeneratorPage() {
                 <div className="grid sm:grid-cols-3 gap-4 mb-6">
                   {[
                     { label: 'Base resume',   value: resumeFiles.length === 1 ? resumeFiles[0]?.name : `${resumeFiles.length} resumes` },
-                    { label: 'Output folder', value: outputFolder.split('/').pop() || outputFolder },
                     { label: 'Jobs selected', value: `${selectedJobs.size} position${selectedJobs.size !== 1 ? 's' : ''}` },
                   ].map(item => (
                     <div key={item.label} className="bg-gray-50 rounded-xl p-3">
@@ -1331,9 +1280,14 @@ export default function ResumeGeneratorPage() {
                   <span className="badge badge-blue">{batchData.done}/{batchData.total}</span>
                 </div>
                 {batchData.status === 'completed' && (
-                  <button onClick={handleDownloadTracker} className="btn-secondary text-sm py-1.5">
-                    <FileSpreadsheetIcon className="w-4 h-4 text-green-600" /> Download Excel Tracker
-                  </button>
+                  <div className="flex gap-2">
+                    <button onClick={handleDownloadZip} className="btn-primary text-sm py-1.5">
+                      <DownloadIcon className="w-4 h-4" /> Download All ZIP
+                    </button>
+                    <button onClick={handleDownloadTracker} className="btn-secondary text-sm py-1.5">
+                      <FileSpreadsheetIcon className="w-4 h-4 text-green-600" /> Excel Tracker
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -1406,8 +1360,11 @@ export default function ResumeGeneratorPage() {
                     </span>
                   </div>
                   <div className="flex gap-3">
-                    <button onClick={handleDownloadTracker} className="btn-primary text-sm py-2 px-4 bg-green-600 hover:bg-green-700">
-                      <FileSpreadsheetIcon className="w-4 h-4" /> Excel Tracker
+                    <button onClick={handleDownloadZip} className="btn-primary text-sm py-2 px-4">
+                      <DownloadIcon className="w-4 h-4" /> Download All ZIP
+                    </button>
+                    <button onClick={handleDownloadTracker} className="btn-secondary text-sm py-2 px-4">
+                      <FileSpreadsheetIcon className="w-4 h-4 text-green-600" /> Excel Tracker
                     </button>
                     <button onClick={() => { setStep(1); setBatchData(null); setBatchTaskId(null); setJobs([]); setSelectedJobs(new Set()) }}
                       className="btn-secondary text-sm py-2 px-4">
@@ -1421,18 +1378,6 @@ export default function ResumeGeneratorPage() {
         </div>
       )}
 
-      {/* Folder Picker Modal */}
-      {isLocalMode && (
-        <FolderPicker
-          isOpen={folderOpen}
-          onClose={() => setFolderOpen(false)}
-          onSelect={(path) => {
-            setOutputFolder(path)
-            try { localStorage.setItem(LOCAL_KEY_OUTPUT_FOLDER, path) } catch (_) {}
-          }}
-          currentPath={outputFolder}
-        />
-      )}
     </div>
   )
 }

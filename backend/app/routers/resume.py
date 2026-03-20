@@ -218,7 +218,6 @@ async def batch_start(
             if k == key and isinstance(v, StarletteUploadFile) and (v.filename or "").strip()
         ]
 
-    output_folder    = fget("output_folder")
     extra_skills     = fget("extra_skills")
     home_location    = fget("home_location")      # optional: candidate's city, state
     jobs_json        = fget("jobs_json")
@@ -230,8 +229,6 @@ async def batch_start(
 
     if not resume_files:
         raise HTTPException(status_code=422, detail="Please upload at least one resume file.")
-    if not output_folder.strip():
-        raise HTTPException(status_code=422, detail="output_folder is required.")
 
     # Extract text from all resume files
     resume_texts: List[str] = []
@@ -303,7 +300,6 @@ async def batch_start(
         _run_batch,
         task_id=task_id,
         resume_texts=resume_texts,
-        output_folder=output_folder,
         extra_skills=extra_skills,
         job_log=job_log,
         home_location=home_location,
@@ -350,18 +346,50 @@ async def batch_export_excel(task_id: str, current_user=Depends(get_current_user
     )
 
 
+@router.get("/batch-download-zip/{task_id}")
+async def batch_download_zip(task_id: str, current_user=Depends(get_current_user)):
+    """Download all generated resume and cover letter files as a ZIP archive."""
+    import zipfile
+    import io
+
+    task = _batch_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    done_jobs = [j for j in task.get("jobs", []) if j.get("status") == "done"]
+    if not done_jobs:
+        raise HTTPException(status_code=404, detail="No completed files to download")
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for job in done_jobs:
+            for path_key in ("resume_pdf_path", "resume_docx_path", "cover_letter_pdf_path", "cover_letter_docx_path"):
+                path = job.get(path_key, "")
+                if path and os.path.isfile(path):
+                    zf.write(path, arcname=os.path.basename(path))
+
+    zip_buffer.seek(0)
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=resumes_{task_id[:8]}.zip"},
+    )
+
+
 # ── Background worker ─────────────────────────────────────────────────────────
 
 async def _run_batch(
     task_id: str,
     resume_texts: List[str],
-    output_folder: str,
     extra_skills: str,
     job_log: str,
     home_location: str = "",
     user_id: int = 0,
 ):
     """Process each job sequentially: tailor resume + cover letter + save files."""
+    import tempfile
+    output_folder = os.path.join(tempfile.gettempdir(), "resume_batch", task_id)
+    os.makedirs(output_folder, exist_ok=True)
     task = _batch_tasks[task_id]
     for i, job in enumerate(task["jobs"]):
         job["status"] = "processing"
