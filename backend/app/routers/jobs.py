@@ -1,7 +1,7 @@
 import asyncio
 import csv
 import io
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -171,15 +171,36 @@ async def match_jobs(
     return JobMatchResponse(results=results)
 
 
+@router.post("/list-sheets")
+async def list_sheets(
+    file: UploadFile = File(...),
+    current_user = Depends(get_current_user),
+):
+    """Return the sheet names for an uploaded Excel workbook."""
+    filename = (file.filename or "").lower()
+    if not filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=422, detail="Only .xlsx/.xls files have multiple sheets.")
+    content = await file.read()
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        sheets = wb.sheetnames
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not read Excel file: {exc}")
+    return {"sheets": sheets}
+
+
 @router.post("/parse-spreadsheet")
 async def parse_spreadsheet(
     file: UploadFile = File(...),
+    sheet_name: str = Form(""),
     current_user = Depends(get_current_user),
 ):
     """
     Parse an uploaded XLSX, XLS, or CSV file and return a list of job objects.
     Expected columns (case-insensitive): Job Title, Company, Job Description,
     Location, URL / Website  (all except Job Title are optional).
+    For Excel files with multiple sheets, pass sheet_name to select which sheet to use.
     """
     filename = (file.filename or "").lower()
     content  = await file.read()
@@ -214,7 +235,10 @@ async def parse_spreadsheet(
         try:
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-            ws = wb.active
+            if sheet_name and sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+            else:
+                ws = wb.active
             rows = list(ws.iter_rows(values_only=True))
         except Exception as exc:
             raise HTTPException(status_code=422, detail=f"Could not read Excel file: {exc}")

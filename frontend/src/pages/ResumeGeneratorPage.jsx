@@ -119,7 +119,7 @@ export default function ResumeGeneratorPage() {
   const [jobLogExpanded, setJobLogExpanded] = useState(false)
 
   // ── Step 2 state ──
-  const [step2Mode,    setStep2Mode]    = useState('search')  // 'search' | 'upload'
+  const [step2Mode,    setStep2Mode]    = useState('upload')  // 'search' | 'upload'
   const [search,       setSearch]       = useState({ location: '', date_range: '7', radius: 25 })
   const [remoteTypes,  setRemoteTypes]  = useState([])   // [] = any (optional)
   const [searchCategories,  setSearchCategories]  = useState([])
@@ -140,6 +140,8 @@ export default function ResumeGeneratorPage() {
   const [sheetParsing,   setSheetParsing]   = useState(false)
   const [sheetError,     setSheetError]     = useState('')
   const [sheetPreview,   setSheetPreview]   = useState([])  // parsed but not yet loaded
+  const [sheetNames,     setSheetNames]     = useState([])  // Excel sheet tabs
+  const [selectedSheet,  setSelectedSheet]  = useState('')  // which sheet to parse
   const sheetInputRef = useRef(null)
 
   // ── Step 3 state ──
@@ -317,14 +319,50 @@ export default function ResumeGeneratorPage() {
     setSheetFile(file)
     setSheetError('')
     setSheetPreview([])
+    setSheetNames([])
+    setSelectedSheet('')
+
+    // For Excel files, first fetch the list of sheets so the user can pick one
+    if (ext === '.xlsx' || ext === '.xls') {
+      setSheetParsing(true)
+      try {
+        const fd = new FormData()
+        fd.append('file', file)
+        const { data } = await api.post(API_ENDPOINTS.GENERATOR_LIST_SHEETS, fd)
+        const sheets = data.sheets || []
+        if (sheets.length > 1) {
+          // Multiple sheets — let user pick, then parse on confirm
+          setSheetNames(sheets)
+          setSelectedSheet(sheets[0])
+          setSheetParsing(false)
+          return  // wait for user to pick a sheet
+        }
+        // Single sheet — proceed straight to parse
+        await parseSheet(file, sheets[0] || '')
+      } catch (err) {
+        const msg = err.response?.data?.detail || err.message || 'Failed to read Excel file'
+        setSheetError(msg)
+        toast.error(msg)
+        setSheetParsing(false)
+      }
+      return
+    }
+
+    // CSV — parse immediately
+    await parseSheet(file, '')
+  }
+
+  const parseSheet = async (file, sheetName) => {
     setSheetParsing(true)
+    setSheetError('')
     try {
       const formData = new FormData()
       formData.append('file', file)
-      // Do NOT set Content-Type manually — axios auto-sets multipart/form-data with the correct boundary
+      if (sheetName) formData.append('sheet_name', sheetName)
       const { data } = await api.post(API_ENDPOINTS.GENERATOR_PARSE_SHEET, formData)
       setSheetPreview(data.jobs || [])
-      toast.success(`Parsed ${data.count} job${data.count !== 1 ? 's' : ''} from spreadsheet`)
+      setSheetNames([])  // hide picker once parsed
+      toast.success(`Parsed ${data.count} job${data.count !== 1 ? 's' : ''} from "${sheetName || 'sheet'}"`)
     } catch (err) {
       const msg = err.response?.data?.detail || err.message || 'Failed to parse spreadsheet'
       setSheetError(msg)
@@ -896,7 +934,7 @@ export default function ResumeGeneratorPage() {
                       <p className="font-semibold text-gray-800">{sheetFile.name}</p>
                       <p className="text-xs text-gray-400">{(sheetFile.size / 1024).toFixed(1)} KB</p>
                       <button type="button"
-                        onClick={(ev) => { ev.stopPropagation(); setSheetFile(null); setSheetPreview([]); setSheetError('') }}
+                        onClick={(ev) => { ev.stopPropagation(); setSheetFile(null); setSheetPreview([]); setSheetError(''); setSheetNames([]); setSelectedSheet('') }}
                         className="text-xs text-red-500 hover:underline flex items-center gap-1 mt-1">
                         <TrashIcon className="w-3 h-3" /> Remove
                       </button>
@@ -909,6 +947,40 @@ export default function ResumeGeneratorPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Sheet picker — shown when Excel has multiple sheets */}
+                {sheetNames.length > 0 && !sheetParsing && (
+                  <div className="rounded-xl border border-brand-200 bg-brand-50 p-4 space-y-3">
+                    <p className="text-sm font-semibold text-brand-800 flex items-center gap-2">
+                      <TableIcon className="w-4 h-4" />
+                      This workbook has {sheetNames.length} sheets — select one to import:
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {sheetNames.map(name => (
+                        <button
+                          key={name}
+                          type="button"
+                          onClick={() => setSelectedSheet(name)}
+                          className={`text-sm px-3 py-1.5 rounded-lg border font-medium transition-all
+                            ${selectedSheet === name
+                              ? 'bg-brand-600 text-white border-brand-600'
+                              : 'bg-white text-gray-700 border-gray-300 hover:border-brand-400 hover:text-brand-700'}`}
+                        >
+                          {selectedSheet === name && <CheckIcon className="w-3 h-3 inline mr-1" />}
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => parseSheet(sheetFile, selectedSheet)}
+                      disabled={!selectedSheet}
+                      className="btn-primary text-sm py-2 px-5"
+                    >
+                      <TableIcon className="w-4 h-4" /> Import "{selectedSheet}"
+                    </button>
+                  </div>
+                )}
 
                 {/* Error */}
                 {sheetError && (

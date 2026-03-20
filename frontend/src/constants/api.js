@@ -31,6 +31,7 @@ export const API_ENDPOINTS = {
   GENERATOR_EXPORT:         (taskId) => `/api/resume/batch-export/${taskId}`,
   GENERATOR_DOWNLOAD_ZIP:   (taskId) => `/api/resume/batch-download-zip/${taskId}`,
   GENERATOR_PARSE_SHEET:    '/api/jobs/parse-spreadsheet',
+  GENERATOR_LIST_SHEETS:    '/api/jobs/list-sheets',
 
   // Contact
   CONTACT_SEND:        '/api/contact/send',
