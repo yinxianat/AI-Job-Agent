@@ -297,6 +297,44 @@ export default function ResumeResultPage() {
   // Cover letter download state
   const [clDownloading, setClDownloading] = useState(null) // 'pdf' | 'docx' | null
 
+  // In production the backend runs on Railway — it cannot browse the user's local
+  // filesystem. Detect this and switch to direct browser downloads instead.
+  const isLocalMode = !import.meta.env.PROD
+
+  // Download resume directly to browser (used in production / cloud mode)
+  const [resumeDownloading, setResumeDownloading] = useState(null) // 'pdf' | 'docx' | null
+  const handleDownloadResume = async (format) => {
+    setResumeDownloading(format)
+    try {
+      const fd = new FormData()
+      fd.append('text',            getCurrentText())
+      fd.append('filename',        defaultFilename)
+      fd.append('is_cover_letter', 'false')
+      fd.append('disposition',     'attachment')
+      if (format === 'pdf') {
+        const res = await api.post(API_ENDPOINTS.RESUME_RENDER_PDF, fd, { responseType: 'blob' })
+        const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }))
+        const a = document.createElement('a'); a.href = url
+        a.download = `${defaultFilename}.pdf`; a.click()
+        URL.revokeObjectURL(url)
+        toast.success('Resume PDF downloaded!')
+      } else {
+        const res = await api.post(API_ENDPOINTS.RESUME_RENDER_DOCX, fd, { responseType: 'blob' })
+        const url = URL.createObjectURL(new Blob([res.data], {
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        }))
+        const a = document.createElement('a'); a.href = url
+        a.download = `${defaultFilename}.docx`; a.click()
+        URL.revokeObjectURL(url)
+        toast.success('Resume DOCX downloaded!')
+      }
+    } catch (err) {
+      toast.error(err.message || `Failed to download resume ${format.toUpperCase()}`)
+    } finally {
+      setResumeDownloading(null)
+    }
+  }
+
   // Folder picker — shared between resume and cover letter saves
   const [folderPickerOpen,  setFolderPickerOpen]  = useState(false)
   const [pendingSaveFormat, setPendingSaveFormat] = useState(null)
@@ -633,19 +671,27 @@ export default function ResumeResultPage() {
                 )}
               </div>
               <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                <button onClick={() => handleSave('pdf', 'resume')} disabled={isSaving}
+                <button
+                  onClick={() => isLocalMode ? handleSave('pdf', 'resume') : handleDownloadResume('pdf')}
+                  disabled={isLocalMode ? isSaving : resumeDownloading !== null}
                   className="btn-primary text-xs py-2 px-4 gap-1.5">
-                  {isSaving && pendingSaveFormat === 'pdf' && pendingSaveMode === 'resume'
+                  {(isLocalMode ? (isSaving && pendingSaveFormat === 'pdf' && pendingSaveMode === 'resume') : resumeDownloading === 'pdf')
                     ? <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    : savedType === 'pdf' && pendingSaveMode === 'resume' ? <CheckIcon className="w-3.5 h-3.5" /> : <SaveIcon className="w-3.5 h-3.5" />}
-                  Save PDF
+                    : (isLocalMode && savedType === 'pdf' && pendingSaveMode === 'resume')
+                      ? <CheckIcon className="w-3.5 h-3.5" />
+                      : isLocalMode ? <SaveIcon className="w-3.5 h-3.5" /> : <DownloadIcon className="w-3.5 h-3.5" />}
+                  {isLocalMode ? 'Save PDF' : 'Download PDF'}
                 </button>
-                <button onClick={() => handleSave('docx', 'resume')} disabled={isSaving}
+                <button
+                  onClick={() => isLocalMode ? handleSave('docx', 'resume') : handleDownloadResume('docx')}
+                  disabled={isLocalMode ? isSaving : resumeDownloading !== null}
                   className="btn-secondary text-xs py-2 px-4 gap-1.5">
-                  {isSaving && pendingSaveFormat === 'docx' && pendingSaveMode === 'resume'
+                  {(isLocalMode ? (isSaving && pendingSaveFormat === 'docx' && pendingSaveMode === 'resume') : resumeDownloading === 'docx')
                     ? <span className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-                    : savedType === 'docx' && pendingSaveMode === 'resume' ? <CheckIcon className="w-3.5 h-3.5" /> : <SaveIcon className="w-3.5 h-3.5" />}
-                  Save DOCX
+                    : (isLocalMode && savedType === 'docx' && pendingSaveMode === 'resume')
+                      ? <CheckIcon className="w-3.5 h-3.5" />
+                      : isLocalMode ? <SaveIcon className="w-3.5 h-3.5" /> : <DownloadIcon className="w-3.5 h-3.5" />}
+                  {isLocalMode ? 'Save DOCX' : 'Download DOCX'}
                 </button>
                 <button onClick={handleDiscard}
                   className="flex items-center gap-1.5 text-xs font-medium px-4 py-2 rounded-lg border border-gray-200 text-gray-500 hover:border-red-300 hover:text-red-500 hover:bg-red-50 transition-colors">
@@ -689,26 +735,30 @@ export default function ResumeResultPage() {
                     : <DownloadIcon className="w-3.5 h-3.5" />}
                   Download DOCX
                 </button>
-                {/* Save to folder */}
-                <button
-                  onClick={() => handleSave('pdf', 'cover_letter')}
-                  disabled={isSaving}
-                  className="flex items-center gap-1.5 text-xs font-medium px-4 py-2 rounded-lg border border-gray-200 text-gray-600 hover:border-brand-300 hover:text-brand-700 hover:bg-brand-50 transition-colors"
-                >
-                  <SaveIcon className="w-3.5 h-3.5" /> Save to Folder
-                </button>
+                {/* Save to folder — local dev only (requires backend on localhost) */}
+                {isLocalMode && (
+                  <button
+                    onClick={() => handleSave('pdf', 'cover_letter')}
+                    disabled={isSaving}
+                    className="flex items-center gap-1.5 text-xs font-medium px-4 py-2 rounded-lg border border-gray-200 text-gray-600 hover:border-brand-300 hover:text-brand-700 hover:bg-brand-50 transition-colors"
+                  >
+                    <SaveIcon className="w-3.5 h-3.5" /> Save to Folder
+                  </button>
+                )}
               </div>
             </div>
           )}
         </div>
       </div>
 
-      <FolderPicker
-        isOpen={folderPickerOpen}
-        onClose={() => { setFolderPickerOpen(false); setPendingSaveFormat(null) }}
-        onSelect={handleFolderSelected}
-        currentPath={savedFolder}
-      />
+      {isLocalMode && (
+        <FolderPicker
+          isOpen={folderPickerOpen}
+          onClose={() => { setFolderPickerOpen(false); setPendingSaveFormat(null) }}
+          onSelect={handleFolderSelected}
+          currentPath={savedFolder}
+        />
+      )}
     </div>
   )
 }

@@ -100,6 +100,10 @@ export default function ResumeGeneratorPage() {
 
   const [step, setStep] = useState(1)
 
+  // In production the backend runs on Railway — it cannot browse the user's local
+  // filesystem. Folder picker is only shown in local dev mode.
+  const isLocalMode = !import.meta.env.PROD
+
   // ── Step 1 state ──
   const [resumeFiles,   setResumeFiles]   = useState([])   // array of File objects
   const [outputFolder,  setOutputFolder]  = useState(
@@ -225,7 +229,7 @@ export default function ResumeGeneratorPage() {
     setExtraSkills(updated.join(', '))
   }
 
-  const step1Valid = resumeFiles.length > 0 && outputFolder
+  const step1Valid = resumeFiles.length > 0 && (isLocalMode ? !!outputFolder : true)
 
   // ── Step 2 helpers ────────────────────────────────────────────────────────
   const setSearchField = (f) => (e) => {
@@ -360,7 +364,7 @@ export default function ResumeGeneratorPage() {
 
   // ── Step 3 — batch generation ────────────────────────────────────────────
   const handleGenerate = async () => {
-    if (!resumeFiles.length || !outputFolder || selectedJobs.size === 0) return
+    if (!resumeFiles.length || (isLocalMode && !outputFolder) || selectedJobs.size === 0) return
     setGenerating(true)
     clearInterval(batchPollRef.current)
 
@@ -505,52 +509,65 @@ export default function ResumeGeneratorPage() {
             </div>
           </div>
 
-          {/* Output folder */}
-          <div className="card">
-            <div className="card-header">
-              <h2 className="font-semibold text-gray-800 flex items-center gap-2">
-                <FolderOpenIcon className="w-4 h-4 text-brand-500" /> Output Folder
-              </h2>
-            </div>
-            <div className="card-body">
-              <div
-                onClick={() => setFolderOpen(true)}
-                className={`flex items-center gap-3 p-3 rounded-xl border-2 border-dashed cursor-pointer transition-colors group
-                  ${outputFolder
-                    ? 'border-brand-400 bg-brand-50 hover:bg-brand-100'
-                    : 'border-gray-300 bg-gray-50 hover:border-brand-400 hover:bg-brand-50'}`}
-              >
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors
-                  ${outputFolder ? 'bg-brand-100' : 'bg-gray-200 group-hover:bg-brand-100'}`}>
-                  <FolderOpenIcon className={`w-5 h-5 ${outputFolder ? 'text-yellow-500' : 'text-gray-400 group-hover:text-yellow-500'}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  {outputFolder ? (
-                    <>
-                      <p className="text-xs font-medium text-brand-700 mb-0.5">Selected folder</p>
-                      <p className="text-sm font-mono text-gray-800 truncate">{outputFolder}</p>
-                    </>
-                  ) : (
-                    <p className="text-sm font-medium text-gray-600 group-hover:text-brand-700">
-                      Click to choose where to save resumes &amp; cover letters
-                    </p>
-                  )}
-                </div>
-                <span className={`shrink-0 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors
-                  ${outputFolder
-                    ? 'bg-brand-100 text-brand-700'
-                    : 'bg-white text-gray-600 border border-gray-300 group-hover:border-brand-400'}`}>
-                  {outputFolder ? 'Change' : 'Browse'}
-                </span>
+          {/* Output folder — local dev only */}
+          {isLocalMode ? (
+            <div className="card">
+              <div className="card-header">
+                <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+                  <FolderOpenIcon className="w-4 h-4 text-brand-500" /> Output Folder
+                </h2>
               </div>
-              {outputFolder && (
-                <p className="mt-2 text-xs text-gray-400">
-                  Files saved as <code className="bg-gray-100 px-1 rounded">JobTitle_Location_Company.pdf/.docx</code> and{' '}
-                  <code className="bg-gray-100 px-1 rounded">CoverLetter_JobTitle_Location_Company.pdf/.docx</code>
-                </p>
-              )}
+              <div className="card-body">
+                <div
+                  onClick={() => setFolderOpen(true)}
+                  className={`flex items-center gap-3 p-3 rounded-xl border-2 border-dashed cursor-pointer transition-colors group
+                    ${outputFolder
+                      ? 'border-brand-400 bg-brand-50 hover:bg-brand-100'
+                      : 'border-gray-300 bg-gray-50 hover:border-brand-400 hover:bg-brand-50'}`}
+                >
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors
+                    ${outputFolder ? 'bg-brand-100' : 'bg-gray-200 group-hover:bg-brand-100'}`}>
+                    <FolderOpenIcon className={`w-5 h-5 ${outputFolder ? 'text-yellow-500' : 'text-gray-400 group-hover:text-yellow-500'}`} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    {outputFolder ? (
+                      <>
+                        <p className="text-xs font-medium text-brand-700 mb-0.5">Selected folder</p>
+                        <p className="text-sm font-mono text-gray-800 truncate">{outputFolder}</p>
+                      </>
+                    ) : (
+                      <p className="text-sm font-medium text-gray-600 group-hover:text-brand-700">
+                        Click to choose where to save resumes &amp; cover letters
+                      </p>
+                    )}
+                  </div>
+                  <span className={`shrink-0 text-xs font-medium px-3 py-1.5 rounded-lg transition-colors
+                    ${outputFolder
+                      ? 'bg-brand-100 text-brand-700'
+                      : 'bg-white text-gray-600 border border-gray-300 group-hover:border-brand-400'}`}>
+                    {outputFolder ? 'Change' : 'Browse'}
+                  </span>
+                </div>
+                {outputFolder && (
+                  <p className="mt-2 text-xs text-gray-400">
+                    Files saved as <code className="bg-gray-100 px-1 rounded">JobTitle_Location_Company.pdf/.docx</code> and{' '}
+                    <code className="bg-gray-100 px-1 rounded">CoverLetter_JobTitle_Location_Company.pdf/.docx</code>
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="card">
+              <div className="card-body">
+                <div className="flex items-center gap-3 p-3 rounded-xl bg-blue-50 border border-blue-200">
+                  <DownloadIcon className="w-5 h-5 text-blue-500 shrink-0" />
+                  <p className="text-sm text-blue-700">
+                    Generated resumes will be available to <strong>download as a ZIP</strong> after generation completes.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Home Location */}
           <div className="card">
@@ -780,7 +797,7 @@ export default function ResumeGeneratorPage() {
 
           <div className="flex justify-end">
             <button
-              onClick={() => step1Valid ? setStep(2) : toast.error('Please upload a resume and select an output folder')}
+              onClick={() => step1Valid ? setStep(2) : toast.error(isLocalMode ? 'Please upload a resume and select an output folder' : 'Please upload a resume first')}
               className={`btn-primary px-8 py-3 ${!step1Valid ? 'opacity-50' : ''}`}
             >
               Next: Find Jobs <ChevronRightIcon className="w-4 h-4" />
@@ -1405,15 +1422,17 @@ export default function ResumeGeneratorPage() {
       )}
 
       {/* Folder Picker Modal */}
-      <FolderPicker
-        isOpen={folderOpen}
-        onClose={() => setFolderOpen(false)}
-        onSelect={(path) => {
-          setOutputFolder(path)
-          try { localStorage.setItem(LOCAL_KEY_OUTPUT_FOLDER, path) } catch (_) {}
-        }}
-        currentPath={outputFolder}
-      />
+      {isLocalMode && (
+        <FolderPicker
+          isOpen={folderOpen}
+          onClose={() => setFolderOpen(false)}
+          onSelect={(path) => {
+            setOutputFolder(path)
+            try { localStorage.setItem(LOCAL_KEY_OUTPUT_FOLDER, path) } catch (_) {}
+          }}
+          currentPath={outputFolder}
+        />
+      )}
     </div>
   )
 }
