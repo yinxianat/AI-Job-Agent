@@ -108,11 +108,6 @@ export default function ResumeGeneratorPage() {
   )
   const [wishes,        setWishes]        = useState(incomingWishes)
 
-  // ── Job description state ──
-  const descriptionFileRef = useRef(null)
-  const [jobDescription,     setJobDescription]     = useState('')
-  const [descriptionUploading, setDescriptionUploading] = useState(false)
-
   // ── Job Log state ──
   const [jobLogText,     setJobLogText]     = useState('')
   const [jobLogFiles,    setJobLogFiles]    = useState([])
@@ -169,29 +164,6 @@ export default function ResumeGeneratorPage() {
     onDropRejected: () => toast.error('Invalid file type. Use PDF, DOCX or DOC.'),
   })
   const removeResumeFile = (idx) => setResumeFiles(prev => prev.filter((_, i) => i !== idx))
-
-  // Job description upload
-  const handleDescriptionFileUpload = async (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    e.target.value = ''
-    setDescriptionUploading(true)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      const { data } = await api.post(API_ENDPOINTS.RESUME_EXTRACT_TEXT, fd)
-      if (data.text?.trim()) {
-        setJobDescription(data.text.trim())
-        toast.success('Job description extracted!')
-      } else {
-        toast.error('Could not extract text from this file')
-      }
-    } catch (err) {
-      toast.error(err.message || 'Failed to extract text')
-    } finally {
-      setDescriptionUploading(false)
-    }
-  }
 
   // Job Log dropzone
   const onDropJobLog = useCallback((accepted) => {
@@ -409,7 +381,6 @@ export default function ResumeGeneratorPage() {
     formData.append('extra_skills', combinedSkills)
     formData.append('home_location', homeLocation)
     formData.append('jobs_json', JSON.stringify(selectedList))
-    formData.append('job_description', jobDescription)
     formData.append('job_log_text', jobLogText)
     jobLogFiles.forEach(f => formData.append('job_log_files', f))
 
@@ -576,53 +547,6 @@ export default function ResumeGeneratorPage() {
                 onChange={(e) => setHomeLocation(e.target.value)}
                 placeholder="e.g. San Francisco, CA"
                 className="input w-full text-sm"
-              />
-            </div>
-          </div>
-
-          {/* Job Description */}
-          <div className="card">
-            <div className="card-header">
-              <h2 className="font-semibold text-gray-800 flex items-center gap-2">
-                <BriefcaseIcon className="w-4 h-4 text-brand-500" />
-                Job Description Context
-                <span className="badge badge-blue text-xs">Optional</span>
-              </h2>
-              <p className="text-xs text-gray-400 mt-0.5">
-                Add context about the types of roles you're targeting. Claude will use this across all generated resumes.
-              </p>
-            </div>
-            <div className="card-body space-y-2">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-gray-500">Paste text or upload a file</span>
-                {descriptionUploading ? (
-                  <span className="text-xs text-gray-400 flex items-center gap-1">
-                    <span className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin inline-block" />
-                    Extracting…
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => descriptionFileRef.current?.click()}
-                    className="text-xs text-brand-600 hover:text-brand-800 flex items-center gap-1 transition-colors"
-                  >
-                    <UploadCloudIcon className="w-3 h-3" /> Upload PDF/DOC
-                  </button>
-                )}
-                <input
-                  ref={descriptionFileRef}
-                  type="file"
-                  accept=".pdf,.docx,.doc,.txt"
-                  className="hidden"
-                  onChange={handleDescriptionFileUpload}
-                />
-              </div>
-              <textarea
-                value={jobDescription}
-                onChange={e => setJobDescription(e.target.value)}
-                rows={4}
-                placeholder="Paste a sample job description or describe the type of roles you're applying for…"
-                className="input resize-y text-sm"
               />
             </div>
           </div>
