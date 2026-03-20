@@ -38,6 +38,7 @@ import {
   RESUME_MAX_FILES,
   JOB_LOG_MAX_FILES,
 } from '../constants/fileTypes'
+import { LOCAL_KEY_OUTPUT_FOLDER } from '../constants/storage'
 
 // ── Local alias — radius options with labels for the generator's pill UI ──────
 const RADIUS_OPTIONS = RADIUS_STEPS.map(v => ({
@@ -101,7 +102,9 @@ export default function ResumeGeneratorPage() {
 
   // ── Step 1 state ──
   const [resumeFiles,   setResumeFiles]   = useState([])   // array of File objects
-  const [outputFolder,  setOutputFolder]  = useState('')
+  const [outputFolder,  setOutputFolder]  = useState(
+    () => { try { return localStorage.getItem(LOCAL_KEY_OUTPUT_FOLDER) || '' } catch { return '' } }
+  )
   const [homeLocation,  setHomeLocation]  = useState('')
   const [folderOpen,    setFolderOpen]    = useState(false)
   const [extraSkills,   setExtraSkills]   = useState(incomingProfile)
@@ -1405,7 +1408,10 @@ export default function ResumeGeneratorPage() {
       <FolderPicker
         isOpen={folderOpen}
         onClose={() => setFolderOpen(false)}
-        onSelect={(path) => setOutputFolder(path)}
+        onSelect={(path) => {
+          setOutputFolder(path)
+          try { localStorage.setItem(LOCAL_KEY_OUTPUT_FOLDER, path) } catch (_) {}
+        }}
         currentPath={outputFolder}
       />
     </div>

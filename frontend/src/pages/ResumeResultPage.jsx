@@ -8,7 +8,7 @@ import {
 import api from '../services/api'
 import toast from 'react-hot-toast'
 import FolderPicker from '../components/FolderPicker'
-import { SESSION_KEY_RESUME_RESULT as SESSION_KEY } from '../constants/storage'
+import { SESSION_KEY_RESUME_RESULT as SESSION_KEY, LOCAL_KEY_OUTPUT_FOLDER } from '../constants/storage'
 import { API_ENDPOINTS } from '../constants/api'
 
 // ── Date-range regex — mirrors backend _DATE_RANGE_RE exactly ────────────────
@@ -289,7 +289,9 @@ export default function ResumeResultPage() {
 
   // Save state
   const [isSaving,    setIsSaving]    = useState(false)
-  const [savedFolder, setSavedFolder] = useState('')
+  const [savedFolder, setSavedFolder] = useState(
+    () => { try { return localStorage.getItem(LOCAL_KEY_OUTPUT_FOLDER) || '' } catch { return '' } }
+  )
   const [savedType,   setSavedType]   = useState(null) // 'pdf' | 'docx' | null
 
   // Cover letter download state
@@ -403,6 +405,7 @@ export default function ResumeResultPage() {
   const handleFolderSelected = async (folder) => {
     setFolderPickerOpen(false)
     setSavedFolder(folder)
+    try { localStorage.setItem(LOCAL_KEY_OUTPUT_FOLDER, folder) } catch (_) {}
     setIsSaving(true)
     try {
       const fd = new FormData()

@@ -1,13 +1,16 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import api from '../services/api'
-import { AUTH_TOKEN_KEY, ALL_SESSION_KEYS } from '../constants/storage'
+import { AUTH_TOKEN_KEY, ALL_SESSION_KEYS, ALL_LOCAL_KEYS } from '../constants/storage'
 import { API_ENDPOINTS } from '../constants/api'
 
 const AuthContext = createContext(null)
 
-function clearSessionData() {
+function clearUserData() {
   ALL_SESSION_KEYS.forEach(key => {
     try { sessionStorage.removeItem(key) } catch (_) {}
+  })
+  ALL_LOCAL_KEYS.forEach(key => {
+    try { localStorage.removeItem(key) } catch (_) {}
   })
 }
 
@@ -46,7 +49,7 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (email, password) => {
     // Clear any stale session data from a previous user before starting a new session
-    clearSessionData()
+    clearUserData()
     const { data } = await api.post(API_ENDPOINTS.AUTH_LOGIN, { email, password })
     setToken(data.access_token)
     setUser(data.user)
@@ -55,7 +58,7 @@ export function AuthProvider({ children }) {
 
   const signup = useCallback(async (username, email, password) => {
     // Clear any stale session data from a previous user before starting a new session
-    clearSessionData()
+    clearUserData()
     const { data } = await api.post(API_ENDPOINTS.AUTH_SIGNUP, { username, email, password })
     setToken(data.access_token)
     setUser(data.user)
@@ -64,7 +67,7 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(() => {
     // Clear all ephemeral session data so it doesn't leak to the next user/session
-    clearSessionData()
+    clearUserData()
     setToken(null)
     setUser(null)
   }, [])
