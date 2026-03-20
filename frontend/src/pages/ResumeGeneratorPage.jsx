@@ -229,7 +229,7 @@ export default function ResumeGeneratorPage() {
     setExtraSkills(updated.join(', '))
   }
 
-  const step1Valid = resumeFiles.length > 0 && (isLocalMode ? !!outputFolder : true)
+  const step1Valid = resumeFiles.length > 0
 
   // ── Step 2 helpers ────────────────────────────────────────────────────────
   const setSearchField = (f) => (e) => {
@@ -364,7 +364,7 @@ export default function ResumeGeneratorPage() {
 
   // ── Step 3 — batch generation ────────────────────────────────────────────
   const handleGenerate = async () => {
-    if (!resumeFiles.length || (isLocalMode && !outputFolder) || selectedJobs.size === 0) return
+    if (!resumeFiles.length || selectedJobs.size === 0) return
     setGenerating(true)
     clearInterval(batchPollRef.current)
 
@@ -797,7 +797,7 @@ export default function ResumeGeneratorPage() {
 
           <div className="flex justify-end">
             <button
-              onClick={() => step1Valid ? setStep(2) : toast.error(isLocalMode ? 'Please upload a resume and select an output folder' : 'Please upload a resume first')}
+              onClick={() => step1Valid ? setStep(2) : toast.error('Please upload a resume first')}
               className={`btn-primary px-8 py-3 ${!step1Valid ? 'opacity-50' : ''}`}
             >
               Next: Find Jobs <ChevronRightIcon className="w-4 h-4" />
