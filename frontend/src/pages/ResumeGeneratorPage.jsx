@@ -130,6 +130,13 @@ export default function ResumeGeneratorPage() {
   )
   const pollRef = useRef(null)
 
+  // ── Single job state ──
+  const [singleJob, setSingleJob] = useState({
+    title: '', company: '', location: '', url: '', description: '',
+  })
+  const singleJobDescRef = useRef(null)
+  const [singleJobUploading, setSingleJobUploading] = useState(false)
+
   // ── Spreadsheet upload state ──
   const [sheetFile,      setSheetFile]      = useState(null)
   const [sheetParsing,   setSheetParsing]   = useState(false)
@@ -370,6 +377,51 @@ export default function ResumeGeneratorPage() {
     toast.success(`${sheetPreview.length} job${sheetPreview.length !== 1 ? 's' : ''} loaded!`)
   }
 
+  // ── Single job helpers ────────────────────────────────────────────────────
+  const setSingleField = (f) => (e) =>
+    setSingleJob(prev => ({ ...prev, [f]: e.target.value }))
+
+  const handleSingleJobDescUpload = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    setSingleJobUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const { data } = await api.post(API_ENDPOINTS.RESUME_EXTRACT_TEXT, fd)
+      if (data.text?.trim()) {
+        setSingleJob(prev => ({ ...prev, description: data.text.trim() }))
+        toast.success('Job description extracted!')
+      } else {
+        toast.error('Could not extract text from this file')
+      }
+    } catch (err) {
+      toast.error(err.message || 'Failed to extract text')
+    } finally {
+      setSingleJobUploading(false)
+    }
+  }
+
+  const loadSingleJob = () => {
+    if (!singleJob.title.trim() && !singleJob.description.trim()) {
+      toast.error('Please fill in at least a Job Title or Job Description')
+      return
+    }
+    const job = {
+      title:       singleJob.title.trim()       || 'Untitled Role',
+      company:     singleJob.company.trim()     || '',
+      location:    singleJob.location.trim()    || '',
+      url:         singleJob.url.trim()         || '',
+      description: singleJob.description.trim() || '',
+    }
+    setJobs([job])
+    setSelectedJobs(new Set([0]))
+    setSearchStatus('completed')
+    setStep2Mode('loaded')
+    toast.success('Job loaded!')
+  }
+
   // ── Assessment ────────────────────────────────────────────────────────────
   const handleRunAssessment = async () => {
     if (!resumeFiles.length || !jobs.length) return
@@ -532,8 +584,8 @@ export default function ResumeGeneratorPage() {
             num: '2',
             color: 'bg-sky-50 border-sky-100 text-sky-600',
             numColor: 'bg-sky-600',
-            title: 'Add your job list',
-            desc: 'Upload an Excel or CSV spreadsheet with your target jobs — including job title, company, and job description columns. Run a Match Assessment to see your fit score for each role.',
+            title: 'Add your jobs',
+            desc: 'Choose how to add jobs: upload an Excel/CSV spreadsheet for batch runs, paste a single job description for a quick one-off, or search job boards directly. Run a Match Assessment to see your fit score.',
           },
           {
             num: '3',
@@ -819,28 +871,38 @@ export default function ResumeGeneratorPage() {
       {step === 2 && (
         <div className="space-y-6">
 
-          {/* ── Mode tab switcher (hidden once jobs are loaded from sheet) ── */}
+          {/* ── Mode tab switcher (hidden once jobs are loaded) ── */}
           {step2Mode !== 'loaded' && (
-            <div className="flex gap-1 p-1 bg-gray-100 rounded-xl w-fit">
+            <div className="flex flex-wrap gap-1 p-1 bg-gray-100 rounded-2xl w-fit">
               <button
                 type="button"
-                onClick={() => setStep2Mode('search')}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all
-                  ${step2Mode === 'search'
+                onClick={() => setStep2Mode('upload')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all
+                  ${step2Mode === 'upload'
                     ? 'bg-white text-brand-700 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'}`}
+                    : 'text-gray-500 hover:text-gray-700 active:scale-95'}`}
               >
-                <SearchIcon className="w-4 h-4" /> Search Jobs
+                <TableIcon className="w-4 h-4" /> Upload Spreadsheet
               </button>
               <button
                 type="button"
-                onClick={() => { if (step2Mode !== 'upload') { setJobs([]); setSelectedJobs(new Set()) } setStep2Mode('upload') }}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all
-                  ${step2Mode === 'upload'
+                onClick={() => { setSingleJob({ title: '', company: '', location: '', url: '', description: '' }); setStep2Mode('single') }}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all
+                  ${step2Mode === 'single'
                     ? 'bg-white text-brand-700 shadow-sm'
-                    : 'text-gray-500 hover:text-gray-700'}`}
+                    : 'text-gray-500 hover:text-gray-700 active:scale-95'}`}
               >
-                <TableIcon className="w-4 h-4" /> Upload Spreadsheet
+                <FileTextIcon className="w-4 h-4" /> Single Job
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep2Mode('search')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all
+                  ${step2Mode === 'search'
+                    ? 'bg-white text-brand-700 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700 active:scale-95'}`}
+              >
+                <SearchIcon className="w-4 h-4" /> Search Jobs
               </button>
             </div>
           )}
@@ -1066,6 +1128,127 @@ export default function ResumeGeneratorPage() {
                     <button type="button" onClick={() => setStep(1)} className="btn-secondary px-6">← Back</button>
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Single Job panel ── */}
+          {step2Mode === 'single' && (
+            <div className="card">
+              <div className="card-header">
+                <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+                  <FileTextIcon className="w-4 h-4 text-brand-500" /> Single Job Info
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Fill in the details for one specific role — Claude will tailor your resume and write a cover letter just for it.
+                </p>
+              </div>
+              <div className="card-body space-y-4">
+
+                {/* Title + Company */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="label">Job Title</label>
+                    <input
+                      type="text"
+                      value={singleJob.title}
+                      onChange={setSingleField('title')}
+                      placeholder="e.g. Senior Software Engineer"
+                      className="input"
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Company <span className="text-gray-400 font-normal normal-case">(optional)</span></label>
+                    <input
+                      type="text"
+                      value={singleJob.company}
+                      onChange={setSingleField('company')}
+                      placeholder="e.g. Acme Corp"
+                      className="input"
+                    />
+                  </div>
+                </div>
+
+                {/* Location + URL */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="label">Location <span className="text-gray-400 font-normal normal-case">(optional)</span></label>
+                    <input
+                      type="text"
+                      value={singleJob.location}
+                      onChange={setSingleField('location')}
+                      placeholder="e.g. San Francisco, CA / Remote"
+                      className="input"
+                    />
+                  </div>
+                  <div>
+                    <label className="label">Job URL <span className="text-gray-400 font-normal normal-case">(optional)</span></label>
+                    <input
+                      type="url"
+                      value={singleJob.url}
+                      onChange={setSingleField('url')}
+                      placeholder="https://..."
+                      className="input"
+                    />
+                  </div>
+                </div>
+
+                {/* Job Description */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="label !mb-0">Job Description</label>
+                    <div className="flex items-center gap-2">
+                      {singleJobUploading ? (
+                        <span className="text-xs text-gray-400 flex items-center gap-1">
+                          <span className="w-3 h-3 border border-gray-400 border-t-transparent rounded-full animate-spin inline-block" />
+                          Extracting…
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => singleJobDescRef.current?.click()}
+                          className="text-xs text-brand-600 font-semibold hover:text-brand-700
+                            flex items-center gap-1 active:scale-95 transition-all duration-150"
+                        >
+                          <UploadCloudIcon className="w-3.5 h-3.5" /> Upload PDF/DOC
+                        </button>
+                      )}
+                      <input
+                        ref={singleJobDescRef}
+                        type="file"
+                        accept=".pdf,.docx,.doc,.txt"
+                        className="hidden"
+                        onChange={handleSingleJobDescUpload}
+                      />
+                    </div>
+                  </div>
+                  <textarea
+                    value={singleJob.description}
+                    onChange={setSingleField('description')}
+                    rows={8}
+                    placeholder="Paste the full job description here, including responsibilities, requirements, and any other relevant details…&#10;&#10;Or click 'Upload PDF/DOC' above to extract text from a file."
+                    className="input resize-none text-sm"
+                  />
+                  <p className="text-xs text-gray-400 mt-1.5">
+                    The more detail you provide, the better Claude can tailor your resume. Include the full JD if possible.
+                  </p>
+                </div>
+
+                <div className="flex justify-between items-center pt-2">
+                  <button type="button" onClick={() => setStep(1)} className="btn-secondary px-6">
+                    ← Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={loadSingleJob}
+                    disabled={!singleJob.title.trim() && !singleJob.description.trim()}
+                    className="btn-primary px-8 py-3 disabled:opacity-50"
+                  >
+                    <CheckIcon className="w-4 h-4" />
+                    Use This Job & Continue
+                    <ChevronRightIcon className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             </div>
           )}
