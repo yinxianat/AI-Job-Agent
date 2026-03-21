@@ -29,9 +29,12 @@ export const API_ENDPOINTS = {
   GENERATOR_RUN:            '/api/resume/batch-start',
   GENERATOR_BATCH_STATUS:   (taskId) => `/api/resume/batch-status/${taskId}`,
   GENERATOR_EXPORT:         (taskId) => `/api/resume/batch-export/${taskId}`,
-  GENERATOR_DOWNLOAD_ZIP:   (taskId) => `/api/resume/batch-download-zip/${taskId}`,
-  GENERATOR_PARSE_SHEET:    '/api/jobs/parse-spreadsheet',
-  GENERATOR_LIST_SHEETS:    '/api/jobs/list-sheets',
+  GENERATOR_DOWNLOAD_ZIP:       (taskId) => `/api/resume/batch-download-zip/${taskId}`,
+  GENERATOR_PARSE_SHEET:        '/api/jobs/parse-spreadsheet',
+  GENERATOR_LIST_SHEETS:        '/api/jobs/list-sheets',
+  GENERATOR_ASSESSMENT_START:   '/api/resume/assessment-start',
+  GENERATOR_ASSESSMENT_STATUS:  (taskId) => `/api/resume/assessment-status/${taskId}`,
+  GENERATOR_ASSESSMENT_EXPORT:  (taskId) => `/api/resume/assessment-export/${taskId}`,
 
   // Contact
   CONTACT_SEND:        '/api/contact/send',

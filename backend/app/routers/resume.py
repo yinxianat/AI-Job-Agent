@@ -21,9 +21,9 @@ router = APIRouter(prefix="/api/resume", tags=["resume"])
 ALLOWED_EXTENSIONS     = {".pdf", ".docx", ".doc"}
 JOB_LOG_EXTENSIONS     = {".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".csv"}
 
-# ── In-memory batch task store ────────────────────────────────────────────────
-# Structure: { task_id: { status, total, done, jobs: [...] } }
-_batch_tasks: Dict[str, dict] = {}
+# ── In-memory task stores ──────────────────────────────────────────────────────
+_batch_tasks:      Dict[str, dict] = {}
+_assessment_tasks: Dict[str, dict] = {}  # { task_id: { status, total, done, assessments: [...] } }
 
 
 # ── Single/multi resume tailor endpoint ───────────────────────────────────────
@@ -374,6 +374,130 @@ async def batch_download_zip(task_id: str, current_user=Depends(get_current_user
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename=resumes_{task_id[:8]}.zip"},
     )
+
+
+# ── Match assessment endpoints ────────────────────────────────────────────────
+
+@router.post("/assessment-start")
+async def assessment_start(
+    request: Request,
+    background: BackgroundTasks,
+    current_user=Depends(get_current_user),
+):
+    """Start a background match-assessment task for a list of jobs vs. the candidate's resume."""
+    form   = await request.form()
+    items  = list(form.multi_items())
+
+    def fget(key: str) -> str:
+        return next((str(v) for k, v in items if k == key), "")
+    def ffiles(key: str):
+        return [v for k, v in items if k == key and isinstance(v, StarletteUploadFile) and (v.filename or "").strip()]
+
+    extra_skills  = fget("extra_skills")
+    jobs_json     = fget("jobs_json")
+    resume_files  = ffiles("resume_files")
+
+    if not resume_files:
+        raise HTTPException(status_code=422, detail="Please upload at least one resume file.")
+
+    resume_texts: List[str] = []
+    for rf in resume_files:
+        ext = os.path.splitext(rf.filename or "")[1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Unsupported resume file: {ext}")
+        file_bytes = await rf.read()
+        text = resume_service.extract_resume_text(file_bytes, rf.filename or "")
+        if text.strip():
+            resume_texts.append(text)
+
+    if not resume_texts:
+        raise HTTPException(status_code=422, detail="Could not extract text from resume(s).")
+
+    try:
+        jobs = json.loads(jobs_json)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid jobs JSON")
+
+    if not jobs:
+        raise HTTPException(status_code=400, detail="No jobs provided")
+
+    task_id = str(uuid.uuid4())
+    _assessment_tasks[task_id] = {
+        "status":      "running",
+        "total":       len(jobs),
+        "done":        0,
+        "assessments": [
+            {
+                "title":    j.get("title",    ""),
+                "company":  j.get("company",  ""),
+                "location": j.get("location", ""),
+                "status":   "pending",
+            }
+            for j in jobs
+        ],
+    }
+
+    background.add_task(
+        _run_assessment,
+        task_id=task_id,
+        resume_texts=resume_texts,
+        extra_skills=extra_skills,
+        jobs=jobs,
+    )
+    return {"task_id": task_id, "total": len(jobs)}
+
+
+@router.get("/assessment-status/{task_id}")
+async def assessment_status(task_id: str, current_user=Depends(get_current_user)):
+    task = _assessment_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Assessment task not found")
+    return task
+
+
+@router.get("/assessment-export/{task_id}")
+async def assessment_export(task_id: str, current_user=Depends(get_current_user)):
+    """Download the match assessment as a styled Excel workbook."""
+    task = _assessment_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Assessment task not found")
+    assessments = task.get("assessments", [])
+    if not assessments:
+        raise HTTPException(status_code=404, detail="No assessment data available")
+    xlsx_bytes = excel_service.assessment_to_excel(assessments)
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=match_assessment_{task_id[:8]}.xlsx"},
+    )
+
+
+async def _run_assessment(
+    task_id: str,
+    resume_texts: List[str],
+    extra_skills: str,
+    jobs: List[dict],
+):
+    """Run Claude assessments for all jobs in parallel (with concurrency limit)."""
+    task = _assessment_tasks[task_id]
+    combined_resume = "\n\n---\n\n".join(resume_texts)
+    sem = asyncio.Semaphore(5)  # max 5 concurrent Claude calls
+
+    async def _assess_one(i: int, job: dict):
+        async with sem:
+            result = await claude_service.assess_job_match(
+                resume_text=combined_resume,
+                job_title=job.get("title", ""),
+                company=job.get("company", ""),
+                job_description=job.get("description", ""),
+                extra_skills=extra_skills,
+            )
+            task["assessments"][i].update(result)
+            task["assessments"][i]["status"] = "done"
+            task["done"] += 1
+
+    await asyncio.gather(*[_assess_one(i, job) for i, job in enumerate(jobs)])
+    task["status"] = "completed"
 
 
 # ── Background worker ─────────────────────────────────────────────────────────

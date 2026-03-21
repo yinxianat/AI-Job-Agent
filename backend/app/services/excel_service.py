@@ -167,3 +167,83 @@ def batch_tracker_to_excel(entries: List[dict]) -> bytes:
     wb.save(buf)
     buf.seek(0)
     return buf.read()
+
+
+def assessment_to_excel(assessments: list) -> bytes:
+    """Build a styled Excel workbook with job match assessments."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Match Assessment"
+
+    SCORE_COLORS = {
+        "Excellent": "D1FAE5",   # green
+        "Strong":    "DBEAFE",   # blue
+        "Good":      "FEF9C3",   # yellow
+        "Fair":      "FED7AA",   # orange
+        "Weak":      "FEE2E2",   # red
+    }
+
+    headers = [
+        "Job Title", "Company", "Location",
+        "Match Score", "Match Level",
+        "Strengths", "Weaknesses",
+        "Key Skills to Develop", "Recommendation",
+    ]
+    ws.append(headers)
+    _style_header_row(ws, len(headers))
+
+    for row_idx, a in enumerate(assessments, start=2):
+        ws.append([
+            a.get("title",                ""),
+            a.get("company",              ""),
+            a.get("location",             ""),
+            a.get("match_score",          ""),
+            a.get("match_level",          ""),
+            "\n".join(f"• {s}" for s in a.get("strengths",              [])),
+            "\n".join(f"• {w}" for w in a.get("weaknesses",             [])),
+            "\n".join(f"• {k}" for k in a.get("key_skills_to_develop",  [])),
+            a.get("recommendation",       ""),
+        ])
+        level = a.get("match_level", "")
+        color = SCORE_COLORS.get(level, "FFFFFF")
+        for col in range(1, len(headers) + 1):
+            cell = ws.cell(row=row_idx, column=col)
+            cell.fill      = PatternFill("solid", fgColor=color)
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            cell.border    = THIN_BORDER
+        # Bold the score cell
+        ws.cell(row=row_idx, column=4).font = Font(bold=True, size=11)
+
+    col_widths = [30, 25, 18, 13, 13, 48, 48, 40, 60]
+    for i, width in enumerate(col_widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+
+    ws.freeze_panes = "A2"
+
+    # Add a legend sheet
+    legend_ws = wb.create_sheet("Legend")
+    legend_ws.append(["Match Level", "Score Range", "Meaning"])
+    legend_data = [
+        ("Excellent", "85-100", "Very strong fit — apply with high confidence"),
+        ("Strong",    "70-84",  "Good fit — likely to get an interview"),
+        ("Good",      "55-69",  "Decent fit — worth applying with tailored resume"),
+        ("Fair",      "40-54",  "Partial fit — significant gaps exist"),
+        ("Weak",      "0-39",   "Poor fit — consider developing missing skills first"),
+    ]
+    for level, score_range, meaning in legend_data:
+        legend_ws.append([level, score_range, meaning])
+    _style_header_row(legend_ws, 3)
+    for row_idx, (level, _, _) in enumerate(legend_data, start=2):
+        color = SCORE_COLORS.get(level, "FFFFFF")
+        for col in range(1, 4):
+            cell = legend_ws.cell(row=row_idx, column=col)
+            cell.fill      = PatternFill("solid", fgColor=color)
+            cell.alignment = Alignment(vertical="top")
+            cell.border    = THIN_BORDER
+    for i, w in enumerate([18, 15, 55], start=1):
+        legend_ws.column_dimensions[get_column_letter(i)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()

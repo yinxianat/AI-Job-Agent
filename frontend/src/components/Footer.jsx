@@ -12,9 +12,9 @@ export default function Footer() {
             {APP_NAME_PRIMARY}<span className="text-brand-500">{APP_NAME_SECONDARY}</span>
           </Link>
           <nav className="flex gap-6 text-sm text-gray-500">
-            <Link to="/"        className="hover:text-gray-900 transition-colors">Home</Link>
-            <Link to="/jobs"    className="hover:text-gray-900 transition-colors">Job Search</Link>
-            <Link to="/resume"  className="hover:text-gray-900 transition-colors">Resume Tailor</Link>
+            <Link to="/"         className="hover:text-gray-900 transition-colors">Home</Link>
+            <Link to="/generate" className="hover:text-gray-900 transition-colors">Resume Generator</Link>
+            <Link to="/resume"   className="hover:text-gray-900 transition-colors">Resume Tailor</Link>
             <Link to="/contact" className="hover:text-gray-900 transition-colors">Contact</Link>
           </nav>
           <p className="text-xs text-gray-400">{APP_COPYRIGHT}</p>

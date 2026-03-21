@@ -139,6 +139,13 @@ export default function ResumeGeneratorPage() {
   const [selectedSheet,  setSelectedSheet]  = useState('')  // which sheet to parse
   const sheetInputRef = useRef(null)
 
+  // ── Assessment state ──
+  const [assessTaskId,    setAssessTaskId]    = useState(null)
+  const [assessData,      setAssessData]      = useState(null)   // task object from backend
+  const [assessing,       setAssessing]       = useState(false)
+  const [assessExpanded,  setAssessExpanded]  = useState({})     // { index: bool }
+  const assessPollRef = useRef(null)
+
   // ── Step 3 state ──
   const [batchTaskId,  setBatchTaskId]  = useState(null)
   const [batchData,    setBatchData]    = useState(null)
@@ -149,6 +156,7 @@ export default function ResumeGeneratorPage() {
   useEffect(() => () => {
     clearInterval(pollRef.current)
     clearInterval(batchPollRef.current)
+    clearInterval(assessPollRef.current)
   }, [])
 
   // ── Step 1 helpers ────────────────────────────────────────────────────────
@@ -360,6 +368,56 @@ export default function ResumeGeneratorPage() {
     // Switch to "loaded" view so the jobs list is visible without the search form
     setStep2Mode('loaded')
     toast.success(`${sheetPreview.length} job${sheetPreview.length !== 1 ? 's' : ''} loaded!`)
+  }
+
+  // ── Assessment ────────────────────────────────────────────────────────────
+  const handleRunAssessment = async () => {
+    if (!resumeFiles.length || !jobs.length) return
+    setAssessing(true)
+    setAssessData(null)
+    setAssessExpanded({})
+    clearInterval(assessPollRef.current)
+
+    const selectedList = [...selectedJobs].map(i => jobs[i])
+    const combinedSkills = [extraSkills, wishes ? `Career goals: ${wishes}` : ''].filter(Boolean).join('\n\n')
+
+    const formData = new FormData()
+    resumeFiles.forEach(f => formData.append('resume_files', f))
+    formData.append('extra_skills', combinedSkills)
+    formData.append('jobs_json', JSON.stringify(selectedList))
+
+    try {
+      const { data } = await api.post(API_ENDPOINTS.GENERATOR_ASSESSMENT_START, formData)
+      setAssessTaskId(data.task_id)
+      setAssessData({ status: 'running', total: data.total, done: 0, assessments: selectedList.map(j => ({ ...j, status: 'pending' })) })
+
+      assessPollRef.current = setInterval(async () => {
+        try {
+          const { data: ad } = await api.get(API_ENDPOINTS.GENERATOR_ASSESSMENT_STATUS(data.task_id))
+          setAssessData(ad)
+          if (ad.status === 'completed' || ad.status === 'failed') {
+            clearInterval(assessPollRef.current)
+            setAssessing(false)
+            if (ad.status === 'completed') toast.success('Assessment complete!')
+          }
+        } catch { clearInterval(assessPollRef.current); setAssessing(false) }
+      }, 2000)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || err.message)
+      setAssessing(false)
+    }
+  }
+
+  const handleDownloadAssessment = async () => {
+    if (!assessTaskId) return
+    try {
+      const res = await api.get(API_ENDPOINTS.GENERATOR_ASSESSMENT_EXPORT(assessTaskId), { responseType: 'blob' })
+      const url = URL.createObjectURL(new Blob([res.data]))
+      const a = document.createElement('a'); a.href = url
+      a.download = `match_assessment_${Date.now()}.xlsx`; a.click()
+      URL.revokeObjectURL(url)
+      toast.success('Assessment downloaded!')
+    } catch (err) { toast.error(err.message) }
   }
 
   // ── Step 3 — batch generation ────────────────────────────────────────────
@@ -1209,6 +1267,189 @@ export default function ResumeGeneratorPage() {
                 className="btn-primary px-8 py-3">
                 Generate for {selectedJobs.size} job{selectedJobs.size !== 1 ? 's' : ''} <ChevronRightIcon className="w-4 h-4" />
               </button>
+            </div>
+          )}
+
+          {/* ── Match Assessment Panel ── */}
+          {jobs.length > 0 && (
+            <div className="card">
+              <div className="card-header flex items-center justify-between">
+                <div>
+                  <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+                    <SparklesIcon className="w-4 h-4 text-brand-500" />
+                    Match Assessment
+                  </h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Claude analyses your resume against each job — scores strengths, gaps, and what to improve.
+                    {!resumeFiles.length && <span className="text-amber-500 ml-1">Upload a resume in Step 1 first.</span>}
+                  </p>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  {assessData?.status === 'completed' && (
+                    <button onClick={handleDownloadAssessment} className="btn-secondary text-sm py-1.5">
+                      <FileSpreadsheetIcon className="w-4 h-4 text-green-600" /> Export Excel
+                    </button>
+                  )}
+                  <button
+                    onClick={handleRunAssessment}
+                    disabled={assessing || !resumeFiles.length}
+                    className="btn-primary text-sm py-1.5 disabled:opacity-50"
+                  >
+                    {assessing
+                      ? <><Loader2Icon className="w-4 h-4 animate-spin" /> Analysing…</>
+                      : assessData
+                        ? <><RefreshCwIcon className="w-4 h-4" /> Re-run</>
+                        : <><SparklesIcon className="w-4 h-4" /> Run Assessment</>}
+                  </button>
+                </div>
+              </div>
+
+              {/* Progress bar while running */}
+              {assessData && assessData.status === 'running' && (
+                <div className="px-5 pt-3 pb-1">
+                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div className="h-full bg-brand-500 rounded-full transition-all duration-500"
+                      style={{ width: `${assessData.total ? (assessData.done / assessData.total) * 100 : 0}%` }} />
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">{assessData.done} of {assessData.total} assessed…</p>
+                </div>
+              )}
+
+              {/* Results */}
+              {assessData?.assessments?.length > 0 && (
+                <div className="divide-y divide-gray-100">
+                  {assessData.assessments.map((a, i) => {
+                    const score = a.match_score
+                    const level = a.match_level
+                    const isOpen = assessExpanded[i]
+                    const scoreColor =
+                      level === 'Excellent' ? 'text-green-700 bg-green-100 border-green-200' :
+                      level === 'Strong'    ? 'text-blue-700  bg-blue-100  border-blue-200'  :
+                      level === 'Good'      ? 'text-yellow-700 bg-yellow-100 border-yellow-200' :
+                      level === 'Fair'      ? 'text-orange-700 bg-orange-100 border-orange-200' :
+                      level === 'Weak'      ? 'text-red-700   bg-red-100   border-red-200'   :
+                                             'text-gray-500  bg-gray-100  border-gray-200'
+                    const barColor =
+                      level === 'Excellent' ? 'bg-green-500' :
+                      level === 'Strong'    ? 'bg-blue-500'  :
+                      level === 'Good'      ? 'bg-yellow-400':
+                      level === 'Fair'      ? 'bg-orange-400':
+                                             'bg-red-400'
+
+                    return (
+                      <div key={i} className={`transition-colors ${isOpen ? 'bg-gray-50/60' : ''}`}>
+                        {/* Row header — always visible */}
+                        <button
+                          type="button"
+                          onClick={() => setAssessExpanded(prev => ({ ...prev, [i]: !prev[i] }))}
+                          className="w-full flex items-center gap-3 px-5 py-3.5 text-left hover:bg-gray-50 transition-colors"
+                        >
+                          {/* Score badge */}
+                          {a.status === 'pending'
+                            ? <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center shrink-0">
+                                <ClockIcon className="w-5 h-5 text-gray-300" />
+                              </div>
+                            : a.status === 'done' && score !== undefined
+                              ? <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 border font-bold ${scoreColor}`}>
+                                  <span className="text-sm leading-none">{score}</span>
+                                  <span className="text-[9px] leading-none mt-0.5 font-medium opacity-80">/100</span>
+                                </div>
+                              : <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center shrink-0">
+                                  <Loader2Icon className="w-5 h-5 text-brand-400 animate-spin" />
+                                </div>
+                          }
+
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-semibold text-gray-900 text-sm">{a.title}</p>
+                              {level && level !== 'Unknown' && (
+                                <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${scoreColor}`}>{level}</span>
+                              )}
+                            </div>
+                            <p className="text-xs text-gray-500 mt-0.5">{a.company}{a.location ? ` · ${a.location}` : ''}</p>
+                            {/* Mini score bar */}
+                            {score !== undefined && (
+                              <div className="mt-1.5 h-1 w-32 bg-gray-200 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full transition-all duration-700 ${barColor}`}
+                                  style={{ width: `${score}%` }} />
+                              </div>
+                            )}
+                          </div>
+                          <div className="shrink-0 text-gray-300">
+                            {isOpen ? <ChevronUpIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
+                          </div>
+                        </button>
+
+                        {/* Expanded detail */}
+                        {isOpen && a.status === 'done' && (
+                          <div className="px-5 pb-4 space-y-3">
+                            {/* Strengths & Weaknesses side by side */}
+                            <div className="grid sm:grid-cols-2 gap-3">
+                              {a.strengths?.length > 0 && (
+                                <div className="rounded-xl bg-green-50 border border-green-200 p-3">
+                                  <p className="text-xs font-semibold text-green-700 mb-2 flex items-center gap-1">
+                                    <CheckCircleIcon className="w-3.5 h-3.5" /> Strengths
+                                  </p>
+                                  <ul className="space-y-1">
+                                    {a.strengths.map((s, si) => (
+                                      <li key={si} className="text-xs text-green-800 flex gap-1.5">
+                                        <span className="shrink-0 mt-0.5">•</span>{s}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {a.weaknesses?.length > 0 && (
+                                <div className="rounded-xl bg-red-50 border border-red-200 p-3">
+                                  <p className="text-xs font-semibold text-red-700 mb-2 flex items-center gap-1">
+                                    <XCircleIcon className="w-3.5 h-3.5" /> Gaps
+                                  </p>
+                                  <ul className="space-y-1">
+                                    {a.weaknesses.map((w, wi) => (
+                                      <li key={wi} className="text-xs text-red-800 flex gap-1.5">
+                                        <span className="shrink-0 mt-0.5">•</span>{w}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                            {/* Skills to develop */}
+                            {a.key_skills_to_develop?.length > 0 && (
+                              <div className="rounded-xl bg-amber-50 border border-amber-200 p-3">
+                                <p className="text-xs font-semibold text-amber-700 mb-2 flex items-center gap-1">
+                                  <StarIcon className="w-3.5 h-3.5" /> Skills to Develop
+                                </p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {a.key_skills_to_develop.map((sk, ki) => (
+                                    <span key={ki} className="text-xs bg-amber-100 text-amber-800 border border-amber-200 px-2 py-0.5 rounded-full">{sk}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {/* Recommendation */}
+                            {a.recommendation && (
+                              <div className="rounded-xl bg-brand-50 border border-brand-200 p-3">
+                                <p className="text-xs font-semibold text-brand-700 mb-1 flex items-center gap-1">
+                                  <SparklesIcon className="w-3.5 h-3.5" /> Recommendation
+                                </p>
+                                <p className="text-xs text-brand-800 leading-relaxed">{a.recommendation}</p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {!assessData && !assessing && (
+                <div className="card-body text-center py-8 text-gray-400">
+                  <SparklesIcon className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm">Click <strong className="text-gray-600">Run Assessment</strong> to get a match score, strengths, and gaps for every selected job.</p>
+                </div>
+              )}
             </div>
           )}
         </div>

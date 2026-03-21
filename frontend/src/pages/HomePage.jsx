@@ -78,8 +78,8 @@ export default function HomePage() {
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             {user ? (
               <>
-                <Link to="/jobs" className="btn-primary bg-white text-brand-700 hover:bg-blue-50 text-base px-8 py-3.5 shadow-xl">
-                  Start Job Search <ArrowRightIcon className="w-5 h-5" />
+                <Link to="/generate" className="btn-primary bg-white text-brand-700 hover:bg-blue-50 text-base px-8 py-3.5 shadow-xl">
+                  Start Generating <ArrowRightIcon className="w-5 h-5" />
                 </Link>
                 <Link to="/resume" className="btn-secondary bg-white/10 border-white/30 text-white hover:bg-white/20 text-base px-8 py-3.5">
                   Tailor My Resume
@@ -192,8 +192,8 @@ export default function HomePage() {
           <p className="text-blue-100 text-lg mb-8">Create your free account and let JobAgent find, research, and apply to your next role.</p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             {user ? (
-              <Link to="/jobs" className="btn-primary bg-white text-brand-700 hover:bg-blue-50 text-base px-8 py-3.5 shadow-xl">
-                Go to Job Search <ArrowRightIcon className="w-5 h-5" />
+              <Link to="/generate" className="btn-primary bg-white text-brand-700 hover:bg-blue-50 text-base px-8 py-3.5 shadow-xl">
+                Go to Resume Generator <ArrowRightIcon className="w-5 h-5" />
               </Link>
             ) : (
               <>

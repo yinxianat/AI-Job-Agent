@@ -7,7 +7,6 @@ import { APP_NAME_PRIMARY, APP_NAME_SECONDARY } from '../constants/app'
 
 const navLinks = [
   { to: '/',         label: 'Home',             public: true  },
-  { to: '/jobs',     label: 'Job Search',       public: false },
   { to: '/generate', label: 'Resume Generator', public: false },
   { to: '/resume',   label: 'Resume Tailor',    public: false },
   { to: '/contact',  label: 'Contact',          public: true  },
