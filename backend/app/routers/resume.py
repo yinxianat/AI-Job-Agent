@@ -428,10 +428,15 @@ async def assessment_start(
         "done":        0,
         "assessments": [
             {
-                "title":    j.get("title",    ""),
-                "company":  j.get("company",  ""),
-                "location": j.get("location", ""),
-                "status":   "pending",
+                "title":       j.get("title",       ""),
+                "company":     j.get("company",     ""),
+                "location":    j.get("location",    ""),
+                "posted_date": j.get("posted_date", ""),
+                "job_url":     j.get("job_url",     j.get("url", "")),
+                "company_url": j.get("company_url", ""),
+                "description": j.get("description", ""),
+                "source":      j.get("source",      ""),
+                "status":      "pending",
             }
             for j in jobs
         ],

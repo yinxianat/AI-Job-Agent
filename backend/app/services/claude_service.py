@@ -338,9 +338,8 @@ async def infer_job_info(description: str) -> Dict[str, str]:
     )
     try:
         raw = response.content[0].text.strip()
-        # Strip markdown fences if present
-        raw = re.sub(r"^```[a-z]*\n?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
-        data = json.loads(raw)
+        json_str = _extract_json_object(raw)
+        data = json.loads(json_str)
         return {
             "job_title": str(data.get("job_title") or "").strip(),
             "company":   str(data.get("company")   or "").strip(),
@@ -545,9 +544,8 @@ Return ONLY this JSON structure:
             messages=[{"role": "user", "content": user_message}],
         )
         raw = response.content[0].text.strip()
-        raw = re.sub(r"^```(?:json)?", "", raw, flags=re.IGNORECASE).strip()
-        raw = re.sub(r"```$", "", raw).strip()
-        return json.loads(raw)
+        json_str = _extract_json_object(raw)
+        return json.loads(json_str)
     except Exception as exc:
         log.error("Assessment error for %s @ %s: %s", job_title, company, exc)
         return {
@@ -558,3 +556,234 @@ Return ONLY this JSON structure:
             "key_skills_to_develop": [],
             "recommendation": f"Assessment unavailable: {exc}",
         }
+
+
+# ── Job category suggestions ───────────────────────────────────────────────────
+
+_SUGGEST_SYSTEM = """You are a career taxonomy expert. Given any job-related input (a title,
+partial phrase, or keyword), return a structured JSON object with:
+  "family"     : short job family / department name (2-4 words, e.g. "Software Engineering")
+  "titles"     : array of 5-8 specific, real-world job titles closely related to the input
+  "categories" : array of 3-6 broader search categories that would surface these jobs on job boards
+
+CRITICAL: Output ONLY the raw JSON object — no markdown fences, no ```json, no explanatory text
+before or after the JSON. Start your response with { and end with }."""
+
+
+def _extract_json_object(text: str) -> str:
+    """
+    Extract the first complete JSON object from text.
+
+    Strategy (in order):
+    1. Try json.loads on the whole stripped text — works when Claude follows instructions.
+    2. Strip markdown code fences (```json ... ```) and retry json.loads.
+    3. Walk character-by-character tracking brace depth while skipping quoted strings,
+       so that { / } inside string values don't confuse the counter.
+
+    Raises ValueError if no valid JSON object can be extracted.
+    """
+    stripped = text.strip()
+
+    # Strategy 1: direct parse (Claude followed the "start with {" instruction)
+    try:
+        json.loads(stripped)
+        return stripped
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Strategy 2: strip markdown fences
+    fence_stripped = re.sub(r'^```(?:json)?\s*', '', stripped, flags=re.IGNORECASE)
+    fence_stripped = re.sub(r'\s*```\s*$', '', fence_stripped).strip()
+    try:
+        json.loads(fence_stripped)
+        return fence_stripped
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Strategy 3: string-aware brace-depth scanning
+    start = text.find('{')
+    if start == -1:
+        raise ValueError("No JSON object found in response")
+
+    depth = 0
+    in_string = False
+    escape_next = False
+    end = start
+
+    for i, ch in enumerate(text[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if not in_string:
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+            if depth == 0:
+                end = i
+                break
+
+    if depth != 0:
+        raise ValueError("Unclosed JSON object in response")
+
+    candidate = text[start:end + 1]
+    # Validate the extracted slice is actually parseable
+    json.loads(candidate)
+    return candidate
+
+
+async def suggest_job_categories(input_text: str) -> Dict[str, Any]:
+    """
+    Use Claude Haiku to suggest related job titles and search categories for a given input.
+    Returns a dict with keys: family (str), titles (list[str]), categories (list[str]).
+    On any error returns an empty structure.
+    """
+    client = get_client()
+    try:
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=_SUGGEST_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": f'Suggest job family, titles, and search categories for: "{input_text}"',
+            }],
+        )
+        raw = response.content[0].text.strip()
+        # Robustly extract the JSON object regardless of surrounding prose or fences
+        json_str = _extract_json_object(raw)
+        data = json.loads(json_str)
+        return {
+            "family":     str(data.get("family", "")),
+            "titles":     [str(t) for t in data.get("titles", [])],
+            "categories": [str(c) for c in data.get("categories", [])],
+        }
+    except Exception as exc:
+        log.warning("suggest_job_categories error for %r: %s", input_text, exc)
+        return {"family": "", "titles": [], "categories": []}
+
+
+# ── Profile-based job category suggestions ─────────────────────────────────────
+
+_PROFILE_SUGGEST_SYSTEM = """You are a senior career counsellor and talent-market analyst.
+Analyse the candidate profile provided and return the top 10–15 most relevant job SEARCH CATEGORIES
+that this person should explore, ranked by how well they match the candidate's skills, experience,
+and stated career goals.
+
+Return ONLY a valid JSON object with a single key "suggestions" — an array sorted descending by score:
+{
+  "suggestions": [
+    {
+      "category":  "<job search keyword / category, e.g. 'Data Engineer'>",
+      "score":     <integer 0-100>,
+      "reason":    "<1-2 sentences: specific skills/experiences from the profile that make this a strong match>",
+      "titles":    ["<related job title 1>", "<related job title 2>", ...]
+    },
+    ...
+  ]
+}
+
+Scoring guide:
+90-100 = Perfect match — core skills & experience align almost entirely
+75-89  = Strong match — most key skills present, very relevant background
+60-74  = Good match — solid overlap, transferable experience
+40-59  = Moderate match — some relevant skills, career pivot potential
+20-39  = Adjacent — limited but notable overlap
+
+Rules:
+- categories must be specific enough to be useful job board search keywords (not "Technology" — use "Full Stack Engineer" or "Cloud Architect")
+- titles should be 3-5 real-world job titles the candidate could realistically target
+- reason must reference SPECIFIC skills, technologies, or experiences from the profile
+- Sort the array by score descending (highest first)
+- CRITICAL: Output ONLY the raw JSON object. Start with { and end with }."""
+
+
+async def suggest_categories_from_profile(
+    resume_texts: List[str],
+    extra_skills: str = "",
+    job_log: str = "",
+    wishes: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    Analyse the candidate's full profile (resumes + skills + goals) and return
+    a list of job search categories ranked by match score.
+
+    Returns list of dicts: {category, score, reason, titles}, sorted desc by score.
+    On error returns an empty list.
+    """
+    client = get_client()
+
+    # Build the profile block
+    parts: List[str] = []
+
+    if resume_texts:
+        for i, text in enumerate(resume_texts):
+            label = f"RESUME {i + 1}" if len(resume_texts) > 1 else "RESUME"
+            parts.append(f"=== {label} ===\n{text[:4000]}")
+
+    if extra_skills.strip():
+        parts.append(f"=== ADDITIONAL SKILLS & KEYWORDS ===\n{extra_skills.strip()[:1000]}")
+
+    if job_log.strip():
+        parts.append(f"=== WORK HISTORY & ACCOMPLISHMENTS LOG ===\n{job_log.strip()[:2000]}")
+
+    if wishes.strip():
+        parts.append(f"=== WHAT I AM LOOKING FOR ===\n{wishes.strip()[:500]}")
+
+    if not parts:
+        return []
+
+    profile_block = "\n\n".join(parts)
+
+    log.info(
+        "suggest_categories_from_profile: profile has %d resume(s), skills=%r, log=%r, wishes=%r",
+        len(resume_texts),
+        bool(extra_skills.strip()),
+        bool(job_log.strip()),
+        bool(wishes.strip()),
+    )
+
+    try:
+        response = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2048,
+            system=_PROFILE_SUGGEST_SYSTEM,
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"Analyse this candidate profile and return ranked job category suggestions:\n\n"
+                    f"{profile_block}"
+                ),
+            }],
+        )
+        raw = response.content[0].text.strip()
+        log.info("suggest_categories_from_profile raw response (first 300 chars): %r", raw[:300])
+
+        json_str = _extract_json_object(raw)
+        data = json.loads(json_str)
+        suggestions = data.get("suggestions", [])
+        log.info("suggest_categories_from_profile: got %d suggestions from Claude", len(suggestions))
+
+        # Normalise and sort
+        result = []
+        for s in suggestions:
+            cat = str(s.get("category", "")).strip()
+            if not cat:
+                continue
+            result.append({
+                "category": cat,
+                "score":    max(0, min(100, int(s.get("score", 0)))),
+                "reason":   str(s.get("reason", "")).strip(),
+                "titles":   [str(t) for t in s.get("titles", [])],
+            })
+        result.sort(key=lambda x: x["score"], reverse=True)
+        return result
+    except Exception as exc:
+        log.error("suggest_categories_from_profile error: %s", exc, exc_info=True)
+        raise  # Let the caller handle and report the error to the frontend

@@ -1,6 +1,28 @@
 // ── Job search shared constants ───────────────────────────────────────────────
 // Single source of truth — used by both JobSearchPage and ResumeGeneratorPage.
 
+/** High-level job families shown as preset chips in the Job Family panel. */
+export const PRESET_JOB_FAMILIES = [
+  { label: 'Software Engineering',      emoji: '💻' },
+  { label: 'Data & Analytics',          emoji: '📊' },
+  { label: 'Product Management',        emoji: '🗂️' },
+  { label: 'Design & UX',               emoji: '🎨' },
+  { label: 'DevOps & Cloud',            emoji: '☁️' },
+  { label: 'Cybersecurity & IT',        emoji: '🔒' },
+  { label: 'AI & Machine Learning',     emoji: '🤖' },
+  { label: 'Mobile Development',        emoji: '📱' },
+  { label: 'Marketing',                 emoji: '📣' },
+  { label: 'Sales & Business Dev',      emoji: '💼' },
+  { label: 'Finance & Accounting',      emoji: '💰' },
+  { label: 'Human Resources',           emoji: '🤝' },
+  { label: 'Operations & Supply Chain', emoji: '⚙️' },
+  { label: 'Project Management',        emoji: '📋' },
+  { label: 'Customer Success',          emoji: '⭐' },
+  { label: 'Legal & Compliance',        emoji: '⚖️' },
+  { label: 'Healthcare',                emoji: '🏥' },
+  { label: 'Education & Training',      emoji: '🎓' },
+]
+
 export const PRESET_CATEGORIES = [
   'Software Engineer',    'Frontend Engineer',     'Backend Engineer',     'Full Stack Engineer',
   'Product Manager',      'Data Scientist',         'Data Analyst',         'Machine Learning Engineer',
@@ -11,11 +33,13 @@ export const PRESET_CATEGORIES = [
 ]
 
 export const DATE_RANGES = [
-  { label: 'Last 24 hrs',  value: '1'  },
-  { label: 'Last 3 days',  value: '3'  },
-  { label: 'Last 7 days',  value: '7'  },
-  { label: 'Last 14 days', value: '14' },
-  { label: 'Last 30 days', value: '30' },
+  { label: 'Last 24 hrs',  value: '1'   },
+  { label: 'Last 3 days',  value: '3'   },
+  { label: 'Last 7 days',  value: '7'   },
+  { label: 'Last 14 days', value: '14'  },
+  { label: 'Last 30 days', value: '30'  },
+  { label: 'Last 90 days', value: '90'  },
+  { label: 'Last 120 days',value: '120' },
 ]
 
 export const WORK_TYPE_OPTIONS = [
