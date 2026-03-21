@@ -478,3 +478,83 @@ Return ONLY the JSON array."""
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
         log.error("Failed to parse Claude score response: %s", exc)
         return [], "Received an unexpected response from Claude. Please try again.", "api_error"
+
+
+# ── Job match assessment ────────────────────────────────────────────────────────
+
+ASSESSMENT_SYSTEM_PROMPT = """You are a seasoned career coach and hiring manager with deep expertise in evaluating candidate-job fit.
+Analyse the candidate's profile against the job posting and return a concise, honest assessment in JSON.
+
+Rules:
+- Be specific and factual — reference actual skills/experiences from the resume
+- Be constructive — weaknesses should be actionable improvement areas
+- match_score must be an integer 0-100 based on genuine keyword, experience, and skills alignment
+- match_level must map exactly: 85-100 = Excellent, 70-84 = Strong, 55-69 = Good, 40-54 = Fair, 0-39 = Weak
+- strengths: 3-5 bullets of concrete reasons this candidate is competitive for this role
+- weaknesses: 3-5 bullets of honest gaps or missing qualifications
+- key_skills_to_develop: 2-4 specific skills/tools the candidate should build to become more competitive
+- recommendation: 2-3 sentences of overall honest career advice for applying to this role
+- Output ONLY valid JSON — no markdown, no code fences, no preamble"""
+
+
+async def assess_job_match(
+    resume_text: str,
+    job_title: str,
+    company: str,
+    job_description: str,
+    extra_skills: str = "",
+) -> dict:
+    """Assess how well a candidate's resume/skills match a job posting."""
+    client = get_client()
+
+    skills_section = (
+        f"\n=== CANDIDATE EXTRA SKILLS & KEYWORDS ===\n{extra_skills}"
+        if extra_skills.strip() else ""
+    )
+    desc_section = (
+        f"\n=== JOB DESCRIPTION ===\n{job_description[:3000]}"
+        if job_description.strip() else "\n(No job description provided — assess based on title and company only.)"
+    )
+
+    user_message = f"""Assess this candidate's fit for the job below.
+
+=== CANDIDATE RESUME ===
+{resume_text[:4000]}
+{skills_section}
+
+=== TARGET JOB ===
+Title:   {job_title}
+Company: {company}
+{desc_section}
+
+Return ONLY this JSON structure:
+{{
+  "match_score": <integer 0-100>,
+  "match_level": "<Excellent|Strong|Good|Fair|Weak>",
+  "strengths": ["<specific strength 1>", "<specific strength 2>", "..."],
+  "weaknesses": ["<specific gap 1>", "<specific gap 2>", "..."],
+  "key_skills_to_develop": ["<skill 1>", "<skill 2>", "..."],
+  "recommendation": "<2-3 sentences of honest advice>"
+}}"""
+
+    try:
+        response = await client.messages.create(
+            model=settings.CLAUDE_MODEL,
+            max_tokens=800,
+            system=ASSESSMENT_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        raw = response.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?", "", raw, flags=re.IGNORECASE).strip()
+        raw = re.sub(r"```$", "", raw).strip()
+        return json.loads(raw)
+    except Exception as exc:
+        log.error("Assessment error for %s @ %s: %s", job_title, company, exc)
+        return {
+            "match_score": 0,
+            "match_level": "Unknown",
+            "strengths": [],
+            "weaknesses": [],
+            "key_skills_to_develop": [],
+            "recommendation": f"Assessment unavailable: {exc}",
+        }

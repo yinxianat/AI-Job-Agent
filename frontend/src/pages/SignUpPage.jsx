@@ -47,7 +47,7 @@ export default function SignUpPage() {
     try {
       await signup(form.username, form.email, form.password)
       toast.success('Account created! Welcome to JobAgent 🎉')
-      navigate('/jobs')
+      navigate('/generate')
     } catch (err) {
       toast.error(err.message)
     } finally {

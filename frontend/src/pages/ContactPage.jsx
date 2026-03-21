@@ -9,28 +9,32 @@ import { API_ENDPOINTS } from '../constants/api'
 
 const FAQS = [
   {
-    q: 'How does JobAgent scrape job listings?',
-    a: 'JobAgent uses an async Python scraper (with BeautifulSoup / Playwright) to search Indeed based on your criteria. Results include job title, company, location, posting date, job description, and direct links.',
+    q: 'What does the Resume Generator do?',
+    a: 'The Resume Generator lets you upload one or more base resumes along with a list of jobs (via Excel or CSV spreadsheet). It then uses Claude AI to tailor each resume to every job automatically — producing a customised PDF and DOCX for each application in one batch run.',
   },
   {
-    q: 'How does the AI resume tailoring work?',
-    a: 'Your uploaded resume is sent to the Claude API along with the job description and company details. Claude rewrites it to match keywords, tone, and required skills — then saves it locally as both PDF and DOCX.',
+    q: 'What spreadsheet formats can I upload for job listings?',
+    a: 'You can upload Excel workbooks (.xlsx, .xls) or CSV files (.csv). For multi-sheet workbooks, you can choose which sheet to use. Your spreadsheet should include columns for job title, company, and job description at minimum.',
   },
   {
-    q: 'Is my data stored on your servers?',
-    a: 'No. JobAgent is a local-first application. Your resumes, job data, and Excel trackers are all saved to folders on your own computer. We only store hashed authentication credentials.',
+    q: 'What is the Match Assessment feature?',
+    a: 'After your jobs are loaded, you can run a Match Assessment. Claude scores each job against your resume with a 0–100 match score, highlights your strengths and weaknesses for that role, lists key skills to develop, and gives a plain-English recommendation — all exportable to an Excel report.',
+  },
+  {
+    q: 'How does the Resume Tailor work?',
+    a: 'Upload your resume and paste in a single job description. Claude rewrites the resume to align with that role\'s keywords, tone, and required skills, then lets you preview, download as PDF or DOCX, and save it to your tracker.',
   },
   {
     q: 'What resume formats are supported for upload?',
-    a: 'JobAgent supports PDF (.pdf), Word 2007+ (.docx), and legacy Word (.doc) formats — up to 10 MB each.',
+    a: 'JobAgent accepts PDF (.pdf), Word 2007+ (.docx), and legacy Word (.doc) files — up to 10 MB each.',
   },
   {
-    q: 'Can I search multiple job categories at once?',
-    a: 'Currently each search targets one category. You can run multiple searches back-to-back and each set of results will be exported to a separate Excel file.',
+    q: 'Is my data stored on your servers?',
+    a: 'Generated resumes are kept in a temporary server-side folder for your session only. We never permanently store your resume content. Only hashed authentication credentials are retained in the database.',
   },
   {
-    q: 'Do I need my own Claude API key?',
-    a: 'Yes. Add your key to the backend .env file as ANTHROPIC_API_KEY. You can get a key at console.anthropic.com.',
+    q: 'Can I download all generated resumes at once?',
+    a: 'Yes. Once a batch run completes, a "Download All as ZIP" button appears so you can grab every tailored resume and cover letter in a single archive.',
   },
 ]
 
@@ -114,7 +118,7 @@ export default function ContactPage() {
           {/* Quick links */}
           <div className="mt-8 grid grid-cols-2 gap-4">
             {[
-              { icon: BriefcaseIcon, title: 'Job Search guide', desc: 'How to configure your first search' },
+              { icon: BriefcaseIcon, title: 'Resume Generator', desc: 'Batch-tailor resumes from a spreadsheet' },
               { icon: ShieldCheckIcon, title: 'Privacy & Data', desc: 'Where your data is stored' },
             ].map((c) => (
               <div key={c.title} className="card p-4 flex items-start gap-3">
