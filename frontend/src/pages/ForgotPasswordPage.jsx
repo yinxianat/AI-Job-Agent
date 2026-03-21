@@ -21,15 +21,12 @@ export default function ForgotPasswordPage() {
     e.preventDefault()
     const err = validate()
     if (err) { setError(err); return }
-
     setLoading(true)
     setError('')
     try {
       await api.post(API_ENDPOINTS.AUTH_FORGOT_PASSWORD, { email })
       setSent(true)
     } catch {
-      // Even on network error show the success state — avoids user-enumeration
-      // but surface a toast for genuine connectivity issues
       toast.error('Request failed — please check your connection and try again.')
     } finally {
       setLoading(false)
@@ -37,45 +34,47 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center bg-gradient-to-br from-brand-50 via-white to-blue-50 px-4 py-12">
-      <div className="w-full max-w-md">
+    <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center
+      bg-gradient-to-br from-brand-50 via-white to-blue-50 px-4 py-10">
+      <div className="w-full max-w-sm">
 
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 bg-brand-600 rounded-2xl shadow-lg mb-4">
+          <div className="inline-flex items-center justify-center w-14 h-14
+            bg-brand-600 rounded-2xl shadow-lg mb-5
+            hover:bg-brand-700 hover:scale-105 transition-all duration-200">
             <BriefcaseIcon className="w-7 h-7 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">Forgot your password?</h1>
-          <p className="mt-1 text-sm text-gray-500">
+          <h1 className="text-2xl font-extrabold text-gray-900">Forgot your password?</h1>
+          <p className="mt-1.5 text-sm text-gray-500">
             Enter your email and we'll send you a reset link.
           </p>
         </div>
 
-        <div className="card shadow-xl">
-          <div className="card-body">
+        <div className="bg-white rounded-3xl border border-gray-100 shadow-lg overflow-hidden">
+          <div className="px-6 py-7">
 
-            {/* ── Success state ── */}
             {sent ? (
-              <div className="text-center py-4 space-y-4">
-                <div className="flex items-center justify-center">
-                  <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
-                    <CheckCircleIcon className="w-8 h-8 text-green-500" />
-                  </div>
+              /* ── Success state ── */
+              <div className="text-center py-4 space-y-5">
+                <div className="w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mx-auto animate-pop-in">
+                  <CheckCircleIcon className="w-8 h-8 text-green-500" />
                 </div>
-                <h2 className="text-lg font-semibold text-gray-900">Check your inbox</h2>
-                <p className="text-sm text-gray-500 leading-relaxed">
-                  If <strong>{email}</strong> is registered with JobAgent, you'll receive a password
-                  reset link shortly. Be sure to check your spam folder too.
-                </p>
-                <p className="text-xs text-gray-400">The link expires in 1 hour.</p>
-                <div className="pt-2 space-y-2">
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Check your inbox</h2>
+                  <p className="text-sm text-gray-500 mt-2 leading-relaxed">
+                    If <strong className="text-gray-700">{email}</strong> is registered,
+                    you'll receive a password reset link shortly. Check your spam folder too.
+                  </p>
+                  <p className="text-xs text-gray-400 mt-2">The link expires in 1 hour.</p>
+                </div>
+                <div className="space-y-2 pt-1">
                   <button
                     onClick={() => { setSent(false); setEmail('') }}
-                    className="btn-secondary w-full justify-center text-sm"
-                  >
+                    className="btn-secondary w-full">
                     Send to a different email
                   </button>
-                  <Link to="/login" className="btn-primary w-full justify-center text-sm block text-center">
+                  <Link to="/login" className="btn-primary w-full">
                     Back to log in
                   </Link>
                 </div>
@@ -87,30 +86,31 @@ export default function ForgotPasswordPage() {
                 <div>
                   <label className="label">Email address</label>
                   <div className="relative">
-                    <MailIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <MailIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-300 pointer-events-none" />
                     <input
                       type="email"
                       value={email}
                       onChange={(e) => { setEmail(e.target.value); setError('') }}
                       placeholder="you@example.com"
-                      className={`input pl-10 ${error ? 'border-red-400 focus:ring-red-400' : ''}`}
+                      className={`input pl-11 ${error ? 'border-red-300 focus:ring-red-300 bg-red-50' : ''}`}
                       autoComplete="email"
                       autoFocus
                     />
                   </div>
-                  {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
+                  {error && (
+                    <p className="mt-1.5 text-xs text-red-500 flex items-center gap-1 animate-slide-down">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
+                      {error}
+                    </p>
+                  )}
                 </div>
 
-                <button
-                  type="submit"
-                  className="btn-primary w-full justify-center py-3"
-                  disabled={loading}
-                >
+                <button type="submit" className="btn-primary w-full py-3.5 text-base" disabled={loading}>
                   {loading ? (
-                    <span className="flex items-center gap-2">
-                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <>
+                      <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
                       Sending…
-                    </span>
+                    </>
                   ) : 'Send reset link'}
                 </button>
               </form>
@@ -118,13 +118,11 @@ export default function ForgotPasswordPage() {
           </div>
         </div>
 
-        {/* Back link */}
         {!sent && (
           <p className="mt-6 text-center text-sm text-gray-500">
-            <Link
-              to="/login"
-              className="inline-flex items-center gap-1 text-brand-600 font-medium hover:underline"
-            >
+            <Link to="/login"
+              className="inline-flex items-center gap-1 text-brand-600 font-bold
+                hover:text-brand-700 hover:underline active:scale-95 transition-all duration-150">
               <ArrowLeftIcon className="w-3.5 h-3.5" /> Back to log in
             </Link>
           </p>

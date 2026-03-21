@@ -514,8 +514,45 @@ export default function ResumeGeneratorPage() {
       <div className="text-center mb-8">
         <h1 className="text-3xl font-extrabold text-gray-900">Resume Generator</h1>
         <p className="mt-2 text-gray-500 max-w-xl mx-auto">
-          Search for jobs, then let Claude tailor your resume and write a cover letter for every role — automatically.
+          Upload your resume, add your job list, and let Claude tailor a unique resume and cover letter for every role — all in one batch run.
         </p>
+      </div>
+
+      {/* How it works — 3-step inline guide */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
+        {[
+          {
+            num: '1',
+            color: 'bg-violet-50 border-violet-100 text-violet-600',
+            numColor: 'bg-violet-600',
+            title: 'Upload your resume',
+            desc: 'Drop in one or more resume files (PDF or Word). Optionally add extra skills and a work history log to give Claude more context.',
+          },
+          {
+            num: '2',
+            color: 'bg-sky-50 border-sky-100 text-sky-600',
+            numColor: 'bg-sky-600',
+            title: 'Add your job list',
+            desc: 'Upload an Excel or CSV spreadsheet with your target jobs — including job title, company, and job description columns. Run a Match Assessment to see your fit score for each role.',
+          },
+          {
+            num: '3',
+            color: 'bg-green-50 border-green-100 text-green-600',
+            numColor: 'bg-green-600',
+            title: 'Generate & download',
+            desc: 'Hit Generate and Claude tailors a resume + cover letter for every selected job. When done, download them all as a ZIP archive in one click.',
+          },
+        ].map(({ num, color, numColor, title, desc }) => (
+          <div key={num} className={`rounded-2xl border p-4 flex gap-3 ${color}`}>
+            <div className={`w-7 h-7 rounded-xl ${numColor} text-white text-xs font-extrabold flex items-center justify-center shrink-0 mt-0.5`}>
+              {num}
+            </div>
+            <div>
+              <p className="text-sm font-bold text-gray-800 leading-snug mb-1">{title}</p>
+              <p className="text-xs text-gray-500 leading-relaxed">{desc}</p>
+            </div>
+          </div>
+        ))}
       </div>
 
       <Stepper current={step} />

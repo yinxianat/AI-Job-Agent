@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import {
-  MailIcon, SendIcon, MessageSquareIcon, ChevronDownIcon, ChevronUpIcon,
-  BriefcaseIcon, ShieldCheckIcon, HelpCircleIcon,
+  MailIcon, SendIcon, MessageSquareIcon, ChevronDownIcon,
+  BriefcaseIcon, ShieldCheckIcon, HelpCircleIcon, SparklesIcon,
+  FileTextIcon, DownloadIcon, CheckCircleIcon,
 } from 'lucide-react'
 import api from '../services/api'
 import toast from 'react-hot-toast'
@@ -22,7 +23,7 @@ const FAQS = [
   },
   {
     q: 'How does the Resume Tailor work?',
-    a: 'Upload your resume and paste in a single job description. Claude rewrites the resume to align with that role\'s keywords, tone, and required skills, then lets you preview, download as PDF or DOCX, and save it to your tracker.',
+    a: "Upload your resume and paste in a single job description. Claude rewrites the resume to align with that role's keywords, tone, and required skills, then lets you preview, download as PDF or DOCX, and save it to your tracker.",
   },
   {
     q: 'What resume formats are supported for upload?',
@@ -38,6 +39,37 @@ const FAQS = [
   },
 ]
 
+const FEATURES = [
+  { icon: BriefcaseIcon, title: 'Resume Generator', desc: 'Batch-tailor from a spreadsheet',  color: 'bg-violet-50 text-violet-600' },
+  { icon: SparklesIcon,  title: 'Match Assessment',  desc: 'AI-scored fit for every role',      color: 'bg-amber-50  text-amber-600'  },
+  { icon: FileTextIcon,  title: 'Resume Tailor',     desc: 'Single-job AI rewrite & preview',   color: 'bg-sky-50    text-sky-600'    },
+  { icon: DownloadIcon,  title: 'ZIP Downloads',     desc: 'All files in one archive',           color: 'bg-green-50  text-green-600'  },
+]
+
+/* ── tiny helper: floating-label field ── */
+function Field({ label, error, children }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <label className="text-xs font-semibold text-gray-500 tracking-wide uppercase">
+        {label}
+      </label>
+      {children}
+      {error && (
+        <p className="text-xs text-red-500 flex items-center gap-1 mt-0.5">
+          <span className="inline-block w-1 h-1 rounded-full bg-red-400" />
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+const inputCls = (err) =>
+  `w-full rounded-2xl border px-4 py-3 text-sm bg-white placeholder-gray-300
+   outline-none transition-all duration-200
+   focus:ring-2 focus:ring-brand-400 focus:border-brand-400 active:scale-[0.995]
+   ${err ? 'border-red-300 bg-red-50 focus:ring-red-300' : 'border-gray-200 hover:border-gray-300'}`
+
 export default function ContactPage() {
   const [form, setForm]       = useState({ name: '', email: '', subject: '', message: '' })
   const [errors, setErrors]   = useState({})
@@ -46,16 +78,16 @@ export default function ContactPage() {
   const [openFaq, setOpenFaq] = useState(null)
 
   const set = (f) => (e) => {
-    setForm((prev) => ({ ...prev, [f]: e.target.value }))
-    setErrors((prev) => ({ ...prev, [f]: '' }))
+    setForm((p) => ({ ...p, [f]: e.target.value }))
+    setErrors((p) => ({ ...p, [f]: '' }))
   }
 
   const validate = () => {
     const e = {}
     if (!form.name.trim())    e.name    = 'Name is required'
-    if (!form.email || !/\S+@\S+\.\S+/.test(form.email)) e.email = 'Valid email is required'
+    if (!form.email || !/\S+@\S+\.\S+/.test(form.email)) e.email = 'Valid email required'
     if (!form.subject.trim()) e.subject = 'Subject is required'
-    if (!form.message.trim() || form.message.length < 20) e.message = 'Message must be at least 20 characters'
+    if (!form.message.trim() || form.message.length < 20) e.message = 'At least 20 characters'
     return e
   }
 
@@ -76,120 +108,198 @@ export default function ContactPage() {
   }
 
   return (
-    <div className="page-container max-w-5xl">
-      {/* Header */}
-      <div className="text-center mb-12">
-        <div className="inline-flex items-center justify-center w-14 h-14 bg-brand-600 rounded-2xl shadow-lg mb-4">
-          <MailIcon className="w-7 h-7 text-white" />
+    <div className="min-h-screen bg-[#f8f9fc]">
+
+      {/* ── Hero ── */}
+      <div className="bg-white border-b border-gray-100">
+        <div className="max-w-3xl mx-auto px-5 pt-14 pb-12 text-center">
+          <div className="inline-flex items-center gap-2 bg-brand-50 text-brand-600 text-xs font-bold
+            tracking-widest uppercase px-4 py-1.5 rounded-full mb-6 select-none">
+            <HelpCircleIcon className="w-3.5 h-3.5" />
+            Support Center
+          </div>
+          <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-900 tracking-tight leading-tight">
+            How can we help?
+          </h1>
+          <p className="mt-3 text-base text-gray-500 max-w-md mx-auto leading-relaxed">
+            Browse the FAQ or send us a message. We reply within one business day.
+          </p>
         </div>
-        <h1 className="text-4xl font-extrabold text-gray-900">Questions & Support</h1>
-        <p className="mt-3 text-gray-500 max-w-xl mx-auto">
-          Browse the FAQ below, or send us a message. We typically respond within one business day.
-        </p>
       </div>
 
-      <div className="grid lg:grid-cols-5 gap-10">
+      {/* ── Feature chips — horizontal scroll on mobile ── */}
+      <div className="max-w-3xl mx-auto px-5 -mt-4">
+        <div className="flex gap-3 overflow-x-auto pb-1 no-scrollbar">
+          {FEATURES.map(({ icon: Icon, title, desc, color }) => (
+            <div key={title}
+              className="flex-shrink-0 bg-white rounded-2xl border border-gray-100 shadow-sm
+                px-4 py-3 flex items-center gap-3 min-w-[160px] sm:flex-1
+                hover:shadow-md hover:-translate-y-0.5 active:scale-95
+                transition-all duration-200 cursor-default">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${color}`}>
+                <Icon className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xs font-bold text-gray-800 leading-snug">{title}</p>
+                <p className="text-[11px] text-gray-400 leading-snug mt-0.5">{desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Main content ── */}
+      <div className="max-w-3xl mx-auto px-5 py-10 flex flex-col lg:grid lg:grid-cols-5 gap-8">
+
         {/* ── FAQ ── */}
         <div className="lg:col-span-3">
-          <h2 className="text-xl font-bold text-gray-900 mb-5 flex items-center gap-2">
-            <HelpCircleIcon className="w-5 h-5 text-brand-500" /> Frequently Asked Questions
-          </h2>
-          <div className="space-y-3">
-            {FAQS.map((faq, i) => (
-              <div key={i} className="card overflow-hidden">
-                <button
-                  onClick={() => setOpenFaq(openFaq === i ? null : i)}
-                  className="w-full flex items-center justify-between p-5 text-left gap-4 hover:bg-gray-50 transition-colors"
-                >
-                  <span className="font-medium text-gray-900 text-sm">{faq.q}</span>
-                  {openFaq === i
-                    ? <ChevronUpIcon className="w-4 h-4 text-brand-500 shrink-0" />
-                    : <ChevronDownIcon className="w-4 h-4 text-gray-400 shrink-0" />}
-                </button>
-                {openFaq === i && (
-                  <div className="px-5 pb-5 text-sm text-gray-600 leading-relaxed border-t border-gray-100 pt-4">
-                    {faq.a}
+          <p className="text-xs font-bold tracking-widest uppercase text-gray-400 mb-4">
+            Frequently Asked Questions
+          </p>
+
+          <div className="space-y-2">
+            {FAQS.map((faq, i) => {
+              const isOpen = openFaq === i
+              return (
+                <div key={i}
+                  style={{ transition: 'box-shadow 0.2s, border-color 0.2s' }}
+                  className={`bg-white rounded-2xl border overflow-hidden
+                    ${isOpen
+                      ? 'border-brand-200 shadow-[0_0_0_3px_rgba(99,102,241,0.08)]'
+                      : 'border-gray-100 shadow-sm hover:border-gray-200 hover:shadow-md'}`}>
+
+                  <button
+                    onClick={() => setOpenFaq(isOpen ? null : i)}
+                    className="w-full flex items-center justify-between px-5 py-4 text-left gap-3
+                      active:bg-gray-50 transition-colors duration-150 min-h-[56px]"
+                  >
+                    <span className={`font-semibold text-sm leading-snug transition-colors duration-150
+                      ${isOpen ? 'text-brand-700' : 'text-gray-800'}`}>
+                      {faq.q}
+                    </span>
+
+                    {/* Animated chevron */}
+                    <span className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0
+                      transition-all duration-200
+                      ${isOpen ? 'bg-brand-100 text-brand-600 rotate-180' : 'bg-gray-100 text-gray-400 rotate-0'}`}>
+                      <ChevronDownIcon className="w-3.5 h-3.5" />
+                    </span>
+                  </button>
+
+                  {/* Smooth open/close via max-height trick */}
+                  <div
+                    style={{
+                      maxHeight: isOpen ? '400px' : '0px',
+                      transition: 'max-height 0.3s cubic-bezier(0.4,0,0.2,1)',
+                      overflow: 'hidden',
+                    }}>
+                    <div className="px-5 pb-5 pt-1 text-sm text-gray-600 leading-relaxed border-t border-gray-50 bg-gray-50/60">
+                      {faq.a}
+                    </div>
                   </div>
-                )}
-              </div>
-            ))}
+                </div>
+              )
+            })}
           </div>
 
-          {/* Quick links */}
-          <div className="mt-8 grid grid-cols-2 gap-4">
-            {[
-              { icon: BriefcaseIcon, title: 'Resume Generator', desc: 'Batch-tailor resumes from a spreadsheet' },
-              { icon: ShieldCheckIcon, title: 'Privacy & Data', desc: 'Where your data is stored' },
-            ].map((c) => (
-              <div key={c.title} className="card p-4 flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-brand-100 flex items-center justify-center shrink-0">
-                  <c.icon className="w-5 h-5 text-brand-600" />
-                </div>
-                <div>
-                  <p className="font-semibold text-gray-800 text-sm">{c.title}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">{c.desc}</p>
-                </div>
-              </div>
-            ))}
+          {/* Privacy note */}
+          <div className="mt-5 flex items-start gap-3 bg-green-50 border border-green-100 rounded-2xl p-4
+            hover:shadow-sm transition-shadow duration-200">
+            <div className="w-9 h-9 rounded-xl bg-white shadow-sm flex items-center justify-center shrink-0">
+              <ShieldCheckIcon className="w-4 h-4 text-green-600" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-green-800">Your data stays yours</p>
+              <p className="text-xs text-green-700 mt-0.5 leading-relaxed">
+                Resume content is never permanently stored — files live in a temporary
+                server folder for your session only.
+              </p>
+            </div>
           </div>
         </div>
 
         {/* ── Contact form ── */}
         <div className="lg:col-span-2">
-          <div className="card sticky top-20">
-            <div className="card-header">
-              <h2 className="font-semibold text-gray-800 flex items-center gap-2">
-                <MessageSquareIcon className="w-4 h-4 text-brand-500" /> Send a Message
-              </h2>
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden
+            lg:sticky lg:top-20">
+
+            {/* Card header */}
+            <div className="px-6 pt-6 pb-5 border-b border-gray-50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-brand-600 flex items-center justify-center shadow-sm">
+                  <MessageSquareIcon className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <p className="font-bold text-gray-900 text-sm">Send a Message</p>
+                  <p className="text-xs text-gray-400 mt-0.5">Reply within one business day</p>
+                </div>
+              </div>
             </div>
-            <div className="card-body">
+
+            <div className="px-6 py-6">
               {sent ? (
-                <div className="text-center py-8 space-y-3">
-                  <div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center mx-auto">
-                    <SendIcon className="w-6 h-6 text-green-600" />
+                /* ── Success state ── */
+                <div className="flex flex-col items-center text-center py-6 gap-4">
+                  <div className="w-16 h-16 rounded-full bg-green-50 flex items-center justify-center
+                    animate-[pulse_1s_ease-in-out_1]">
+                    <CheckCircleIcon className="w-8 h-8 text-green-500" />
                   </div>
-                  <p className="font-semibold text-gray-900">Message sent!</p>
-                  <p className="text-sm text-gray-500">We'll reply to <strong>{form.email}</strong> shortly.</p>
-                  <button onClick={() => { setSent(false); setForm({ name:'',email:'',subject:'',message:'' }) }}
-                    className="btn-secondary text-sm mx-auto">
-                    Send another
+                  <div>
+                    <p className="font-bold text-gray-900">Message sent!</p>
+                    <p className="text-sm text-gray-500 mt-1">
+                      We'll reply to{' '}
+                      <span className="font-semibold text-gray-700">{form.email}</span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => { setSent(false); setForm({ name:'', email:'', subject:'', message:'' }) }}
+                    className="text-sm font-semibold text-brand-600 hover:text-brand-700
+                      active:scale-95 transition-all duration-150 underline underline-offset-2 mt-1">
+                    Send another message
                   </button>
                 </div>
               ) : (
+                /* ── Form ── */
                 <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-                  <div>
-                    <label className="label">Your name</label>
-                    <input type="text" value={form.name} onChange={set('name')}
-                      placeholder="Jane Smith"
-                      className={`input ${errors.name ? 'border-red-400' : ''}`} />
-                    {errors.name && <p className="mt-1 text-xs text-red-500">{errors.name}</p>}
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field label="Name" error={errors.name}>
+                      <input type="text" value={form.name} onChange={set('name')}
+                        placeholder="Jane Smith" className={inputCls(errors.name)} />
+                    </Field>
+                    <Field label="Email" error={errors.email}>
+                      <input type="email" value={form.email} onChange={set('email')}
+                        placeholder="jane@example.com" className={inputCls(errors.email)} />
+                    </Field>
                   </div>
-                  <div>
-                    <label className="label">Email address</label>
-                    <input type="email" value={form.email} onChange={set('email')}
-                      placeholder="jane@example.com"
-                      className={`input ${errors.email ? 'border-red-400' : ''}`} />
-                    {errors.email && <p className="mt-1 text-xs text-red-500">{errors.email}</p>}
-                  </div>
-                  <div>
-                    <label className="label">Subject</label>
+
+                  <Field label="Subject" error={errors.subject}>
                     <input type="text" value={form.subject} onChange={set('subject')}
-                      placeholder="Question about resume tailoring"
-                      className={`input ${errors.subject ? 'border-red-400' : ''}`} />
-                    {errors.subject && <p className="mt-1 text-xs text-red-500">{errors.subject}</p>}
-                  </div>
-                  <div>
-                    <label className="label">Message</label>
+                      placeholder="Question about resume tailoring" className={inputCls(errors.subject)} />
+                  </Field>
+
+                  <Field label="Message" error={errors.message}>
                     <textarea value={form.message} onChange={set('message')}
                       rows={5} placeholder="Tell us what's on your mind…"
-                      className={`input resize-none ${errors.message ? 'border-red-400' : ''}`} />
-                    {errors.message && <p className="mt-1 text-xs text-red-500">{errors.message}</p>}
-                  </div>
-                  <button type="submit" className="btn-primary w-full justify-center py-3" disabled={loading}>
+                      className={`${inputCls(errors.message)} resize-none`} />
+                  </Field>
+
+                  <button type="submit" disabled={loading}
+                    className="w-full flex items-center justify-center gap-2
+                      bg-brand-600 hover:bg-brand-700 active:scale-[0.97]
+                      disabled:opacity-50 disabled:cursor-not-allowed
+                      text-white text-sm font-bold py-3.5 rounded-2xl
+                      shadow-sm hover:shadow-md
+                      transition-all duration-200 min-h-[52px]">
                     {loading ? (
-                      <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Sending…</>
+                      <>
+                        <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                        Sending…
+                      </>
                     ) : (
-                      <><SendIcon className="w-4 h-4" /> Send message</>
+                      <>
+                        <SendIcon className="w-4 h-4" />
+                        Send message
+                      </>
                     )}
                   </button>
                 </form>
