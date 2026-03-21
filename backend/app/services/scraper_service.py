@@ -1,20 +1,29 @@
 """
 Job scraper — multi-source strategy
 =====================================
-All five sources are attempted concurrently on every search.
-Google Jobs is the last-resort fallback if all five return 0.
+Sources are selectively activated based on the user's location preference to
+ensure results stay geographically relevant.
 
-Sources
--------
-1. Indeed RSS       – stable XML feed, no JS rendering needed
-2. The Muse API     – free JSON API, professional/tech jobs, location-aware
-3. Remotive API     – free JSON API, remote tech jobs (always queried)
-4. RemoteOK API     – free JSON API, remote tech jobs (always queried)
-5. Arbeit Now API   – free JSON API, broad job coverage, location-aware
+Source gating rules
+-------------------
+Location-aware (always run):
+  1. Indeed RSS       — stable XML feed, location + radius aware, US-focused
+  2. The Muse         — free JSON API, professional/tech jobs, location-aware
 
-Fallback (only when all 5 return 0):
-6. Google Jobs scraper – JSON-LD parsing + HTML card fallback,
-                         returns [] gracefully on bot-detection
+Remote / global (run only when remote wanted OR no location given):
+  3. Remotive         — free JSON API, remote tech jobs only
+  4. RemoteOK         — free JSON API, remote tech jobs only
+  5. Jobicy           — free JSON API, remote jobs, keyword + geo params
+  6. We Work Remotely — free RSS feed, remote jobs, category-mapped feeds
+  7. Himalayas        — free JSON API, remote-first jobs
+
+No-location fallback (run only when NO location specified):
+  8. Arbeit Now       — European board; useful as a global catchall,
+                        but location filter unreliable for US cities
+
+Last-resort fallback (only when every source above returns 0):
+  9. Google Jobs      — JSON-LD parsing + HTML card fallback,
+                        returns [] gracefully on bot-detection
 
 Each job dict carries a "source" field so the UI can show provenance.
 The task result includes a "sources" dict with per-source counts for debugging.
@@ -156,19 +165,38 @@ async def _search_category(
     remote: str,
 ) -> Tuple[List[dict], Dict[str, int]]:
     """
-    Run ALL sources concurrently.
-    Remotive and RemoteOK are always queried (not just for remote searches)
-    so there is always at least some fallback when Indeed/Muse are blocked.
-    Falls back to Google only if every source returns 0.
+    Run sources concurrently, gating non-location-aware sources appropriately.
+
+    Source behaviour:
+    - Indeed RSS        : fully location-aware (radius, city, state)
+    - The Muse          : location-aware (US-focused, passes location param)
+    - Remotive          : remote-only, no location filter
+    - RemoteOK          : remote-only, no location filter
+    - Jobicy            : remote-only JSON API (keyword + geo)
+    - We Work Remotely  : remote-only RSS (category-mapped feeds)
+    - Himalayas         : remote-first JSON API
+    - Arbeit Now        : European board — only when no location given
+
+    Falls back to Google Jobs only if every active source returns 0.
     """
-    # ── All 5 sources run concurrently every time ─────────────────────────────
+    has_location = bool(location.strip())
+    wants_remote = remote in ("only", "include") or not has_location
+
+    # Always-on: US-focused, location-aware boards
     source_fns = {
-        "Indeed":    _scrape_indeed_rss(category, location, date_range, radius, remote),
-        "The Muse":  _fetch_the_muse(category, location),
-        "Remotive":  _fetch_remotive(category),
-        "RemoteOK":  _fetch_remote_ok(category),
-        "Arbeit Now": _fetch_arbeit_now(category, location),
+        "Indeed":   _scrape_indeed_rss(category, location, date_range, radius, remote),
+        "The Muse": _fetch_the_muse(category, location),
     }
+    # Remote / global boards — only when user wants remote or no location set
+    if wants_remote:
+        source_fns["Remotive"]          = _fetch_remotive(category)
+        source_fns["RemoteOK"]          = _fetch_remote_ok(category)
+        source_fns["Jobicy"]            = _fetch_jobicy(category)
+        source_fns["We Work Remotely"]  = _fetch_wwr(category)
+        source_fns["Himalayas"]         = _fetch_himalayas(category)
+    # Arbeit Now is a European board — useful only as a no-location global catchall
+    if not has_location:
+        source_fns["Arbeit Now"] = _fetch_arbeit_now(category, location)
 
     labels  = list(source_fns.keys())
     results = await asyncio.gather(*source_fns.values(), return_exceptions=True)
@@ -463,7 +491,209 @@ async def _fetch_arbeit_now(category: str, location: str = "") -> List[dict]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Source 6 — Google Jobs  (last-resort fallback when all 5 return 0)
+# Source 6 — Jobicy  (free JSON API, remote tech jobs, no auth)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _fetch_jobicy(category: str) -> List[dict]:
+    """
+    Jobicy public API — free JSON, no auth, remote-only jobs.
+    https://jobicy.com/api/v2/remote-jobs?count=20&tag={query}
+    """
+    if not category:
+        return []
+    url = f"https://jobicy.com/api/v2/remote-jobs?count=20&tag={quote_plus(category)}"
+    try:
+        async with httpx.AsyncClient(headers=_JSON_HEADERS, follow_redirects=True, timeout=15) as c:
+            r = await c.get(url)
+            if r.status_code != 200:
+                return []
+            data = r.json()
+        jobs = []
+        for j in data.get("jobs", []):
+            pub = j.get("pubDate") or ""
+            try:
+                posted = datetime.fromisoformat(pub[:19]).strftime("%b %d, %Y")
+            except Exception:
+                posted = pub[:10] if pub else "N/A"
+            desc_raw = j.get("jobExcerpt") or j.get("jobDescription") or ""
+            desc = BeautifulSoup(desc_raw, "lxml").get_text(" ", strip=True)[:400]
+            region = j.get("jobGeo") or j.get("jobRegion") or "Remote"
+            job_url = j.get("url") or j.get("jobSlug") or ""
+            if job_url and not job_url.startswith("http"):
+                job_url = f"https://jobicy.com/jobs/{job_url}"
+            if j.get("jobTitle"):
+                jobs.append({
+                    "title":       j["jobTitle"],
+                    "company":     j.get("companyName") or "N/A",
+                    "location":    region,
+                    "posted_date": posted,
+                    "job_url":     job_url,
+                    "description": desc,
+                    "source":      "Jobicy",
+                })
+        return jobs
+    except Exception as e:
+        logger.debug("Jobicy error: %s", e)
+        return []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Source 7 — We Work Remotely  (free RSS feed, remote tech jobs, no auth)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Map category → WWR feed slug so we hit the most relevant category feed.
+# Falls back to the all-jobs feed when no mapping exists.
+_WWR_SLUG = {
+    "software engineer":         "programming",
+    "frontend engineer":         "programming",
+    "backend engineer":          "programming",
+    "full stack engineer":       "programming",
+    "mobile developer":          "programming",
+    "qa engineer":               "programming",
+    "data scientist":            "programming",
+    "data analyst":              "programming",
+    "machine learning engineer": "programming",
+    "devops / sre":              "devops-sysadmin",
+    "cloud engineer":            "devops-sysadmin",
+    "product manager":           "product",
+    "ux designer":               "design-ux",
+    "ui designer":               "design-ux",
+    "marketing manager":         "marketing-sales",
+    "sales representative":      "marketing-sales",
+    "hr manager":                "management-finance",
+    "finance analyst":           "management-finance",
+    "project manager":           "management-finance",
+}
+
+async def _fetch_wwr(category: str) -> List[dict]:
+    """
+    We Work Remotely public RSS feeds — no auth required.
+    Category feeds give tighter relevance than the all-jobs feed.
+    https://weworkremotely.com/categories/remote-{slug}-jobs.rss
+    """
+    slug = _WWR_SLUG.get(category.lower())
+    url  = (
+        f"https://weworkremotely.com/categories/remote-{slug}-jobs.rss"
+        if slug else
+        "https://weworkremotely.com/remote-jobs.rss"
+    )
+    try:
+        async with httpx.AsyncClient(headers=_RSS_HEADERS, follow_redirects=True, timeout=15) as c:
+            r = await c.get(url)
+            if r.status_code != 200:
+                return []
+            xml_text = r.text
+
+        clean = re.sub(r'\s+xmlns(?::\w+)?="[^"]*"', "", xml_text)
+        try:
+            root = ET.fromstring(clean)
+        except ET.ParseError:
+            return []
+
+        channel = root.find("channel") or root
+        jobs: List[dict] = []
+        for item in channel.findall("item")[:20]:
+            try:
+                title_raw = (item.findtext("title") or "").strip()
+                link      = (item.findtext("link")  or "").strip()
+                pub       = (item.findtext("pubDate") or "").strip()
+                # WWR encodes region in a <region> tag
+                region_el = item.find("region")
+                region    = (region_el.text or "Remote").strip() if region_el is not None else "Remote"
+
+                # Title format: "Company Name | Job Title"
+                company, title = "N/A", title_raw
+                if " | " in title_raw:
+                    parts   = title_raw.split(" | ", 1)
+                    company = parts[0].strip()
+                    title   = parts[1].strip()
+
+                posted = "N/A"
+                if pub:
+                    try:
+                        posted = parsedate_to_datetime(pub).strftime("%b %d, %Y")
+                    except Exception:
+                        posted = pub[:16]
+
+                desc_html = (item.findtext("description") or "").strip()
+                desc = BeautifulSoup(desc_html, "lxml").get_text(" ", strip=True)[:400] if desc_html else ""
+
+                if title and title != "N/A":
+                    jobs.append({
+                        "title":       title,
+                        "company":     company,
+                        "location":    region,
+                        "posted_date": posted,
+                        "job_url":     link,
+                        "description": desc,
+                        "source":      "We Work Remotely",
+                    })
+            except Exception:
+                continue
+        return jobs
+    except Exception as e:
+        logger.debug("WWR error: %s", e)
+        return []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Source 8 — Himalayas  (free JSON API, remote jobs, no auth)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _fetch_himalayas(category: str) -> List[dict]:
+    """
+    Himalayas public jobs API — free JSON, no auth, remote-first jobs.
+    https://himalayas.app/jobs/api/search?q={query}&limit=20
+    """
+    if not category:
+        return []
+    url = f"https://himalayas.app/jobs/api/search?q={quote_plus(category)}&limit=20"
+    try:
+        async with httpx.AsyncClient(headers=_JSON_HEADERS, follow_redirects=True, timeout=15) as c:
+            r = await c.get(url)
+            if r.status_code != 200:
+                return []
+            data = r.json()
+        jobs = []
+        for j in data.get("jobs", []):
+            pub = j.get("createdAt") or j.get("publishedAt") or ""
+            try:
+                posted = datetime.fromisoformat(pub[:19]).strftime("%b %d, %Y")
+            except Exception:
+                posted = pub[:10] if pub else "N/A"
+
+            # Location: prefer first named location, fall back to "Remote"
+            locations = j.get("locations") or []
+            loc_str   = locations[0].get("name") if locations else "Remote"
+
+            company_obj = j.get("company") or {}
+            company     = (
+                company_obj.get("name") if isinstance(company_obj, dict)
+                else j.get("companyName") or "N/A"
+            )
+
+            job_url = j.get("applicationLink") or j.get("url") or ""
+            desc_raw = j.get("description") or j.get("shortDescription") or ""
+            desc = BeautifulSoup(desc_raw, "lxml").get_text(" ", strip=True)[:400] if desc_raw else ""
+
+            if j.get("title"):
+                jobs.append({
+                    "title":       j["title"],
+                    "company":     company or "N/A",
+                    "location":    loc_str or "Remote",
+                    "posted_date": posted,
+                    "job_url":     job_url,
+                    "description": desc,
+                    "source":      "Himalayas",
+                })
+        return jobs
+    except Exception as e:
+        logger.debug("Himalayas error: %s", e)
+        return []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Source 9 — Google Jobs  (last-resort fallback when all sources return 0)
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _scrape_google_jobs(
