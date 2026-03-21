@@ -10,10 +10,12 @@ export const API_ENDPOINTS = {
   AUTH_RESET_PASSWORD: '/api/auth/reset-password',
 
   // Jobs
-  JOBS_SEARCH:         '/api/jobs/search',
-  JOBS_TASK:           (taskId) => `/api/jobs/task/${taskId}`,
-  JOBS_MATCH:          '/api/jobs/match',
-  JOBS_EXPORT:         (taskId) => `/api/jobs/export/${taskId}`,
+  JOBS_SEARCH:            '/api/jobs/search',
+  JOBS_TASK:              (taskId) => `/api/jobs/task/${taskId}`,
+  JOBS_MATCH:             '/api/jobs/match',
+  JOBS_EXPORT:            (taskId) => `/api/jobs/export/${taskId}`,
+  JOBS_SUGGEST_CATEGORIES: '/api/jobs/suggest-categories',
+  JOBS_SUGGEST_FROM_PROFILE: '/api/jobs/suggest-from-profile',
 
   // Resume tailor
   RESUME_TAILOR:        '/api/resume/tailor',

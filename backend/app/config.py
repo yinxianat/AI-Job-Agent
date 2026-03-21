@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     CLAUDE_MODEL: str = "claude-opus-4-6"
 
+    # Job APIs
+    JSEARCH_API_KEY: str = ""   # RapidAPI key for JSearch (jsearch.p.rapidapi.com)
+
     # Email
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587

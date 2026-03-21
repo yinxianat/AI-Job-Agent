@@ -35,10 +35,46 @@ class SearchTaskResponse(BaseModel):
 
 
 class TaskStatusResponse(BaseModel):
-    task_id: str
-    status:  str
-    results: Optional[List[Dict[str, Any]]] = None  # dict so extra fields pass through
-    error:   Optional[str] = None
+    task_id:       str
+    status:        str
+    results:       Optional[List[Dict[str, Any]]] = None  # dict so extra fields pass through
+    error:         Optional[str] = None
+    sources:       Optional[Dict[str, int]] = None   # per-source job counts
+    source_errors: Optional[Dict[str, str]] = None   # per-source error messages
+
+
+# ── AI job category suggestions ───────────────────────────────────────────────
+
+class JobSuggestRequest(BaseModel):
+    input: str   # user-typed job title / keyword
+
+
+class JobSuggestResponse(BaseModel):
+    family:     str        = ""   # e.g. "Software Engineering"
+    titles:     List[str]  = []   # specific job titles
+    categories: List[str]  = []   # broader search categories
+
+
+# ── AI profile-based category suggestions ────────────────────────────────────
+
+class ProfileSuggestRequest(BaseModel):
+    resume_texts: List[str] = []   # extracted text from one or more resume files
+    extra_skills: str       = ""   # comma-separated skill tags
+    job_log:      str       = ""   # work history / accomplishments log
+    wishes:       str       = ""   # what the candidate is looking for
+
+
+class ProfileCategorySuggestion(BaseModel):
+    category: str
+    score:    int
+    reason:   str
+    titles:   List[str] = []
+
+
+class ProfileSuggestResponse(BaseModel):
+    suggestions: List[ProfileCategorySuggestion] = []
+    error:       Optional[str] = None
+    debug_info:  Optional[str] = None   # e.g. "extracted 3200 chars from resume.pdf"
 
 
 # ── AI job matching ───────────────────────────────────────────────────────────

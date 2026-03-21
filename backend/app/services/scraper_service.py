@@ -6,6 +6,11 @@ ensure results stay geographically relevant.
 
 Source gating rules
 -------------------
+Primary (always run when API key is set):
+  0. JSearch (RapidAPI) — real-time aggregator: Google Jobs, LinkedIn, Indeed,
+                          Glassdoor, ZipRecruiter. Most up-to-date source.
+                          Requires JSEARCH_API_KEY in .env
+
 Location-aware (always run):
   1. Indeed RSS       — stable XML feed, location + radius aware, US-focused
   2. The Muse         — free JSON API, professional/tech jobs, location-aware
@@ -43,6 +48,8 @@ from urllib.parse import quote_plus
 import httpx
 from bs4 import BeautifulSoup
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 # ── In-memory task store ───────────────────────────────────────────────────────
@@ -67,6 +74,21 @@ _REMOTE_FILTER = {
     "only":    "&sc=0kf%3Aattr(DSQF7)%3B",
     "include": "&sc=0kf%3Aattr(DSQF7)attr(RBLC7)%3B",
     "no":      "",
+}
+
+# ── JSearch (RapidAPI) date-range mapping ─────────────────────────────────────
+# date_range is passed as number of days (string); map to JSearch's date_posted param.
+# JSearch's broadest option is "month"; 90 and 120 day ranges fall back to "all"
+# so the RSS/scraping sources (which use Indeed's fromage param directly) carry
+# the extended date filtering for those longer windows.
+_JSEARCH_DATE_MAP: Dict[str, str] = {
+    "1":   "today",
+    "3":   "3days",
+    "7":   "week",
+    "14":  "month",
+    "30":  "month",
+    "90":  "all",
+    "120": "all",
 }
 
 # ── The Muse category map ─────────────────────────────────────────────────────
@@ -100,7 +122,7 @@ _MUSE_CAT = {
 
 def create_task() -> str:
     tid = str(uuid.uuid4())
-    _tasks[tid] = {"status": "pending", "results": [], "error": None, "sources": {}}
+    _tasks[tid] = {"status": "pending", "results": [], "error": None, "sources": {}, "source_errors": {}}
     return tid
 
 
@@ -125,15 +147,16 @@ async def run_search(
             return_exceptions=True,
         )
 
-        seen:    set             = set()
-        merged:  List[dict]      = []
-        sources: Dict[str, int]  = {}
+        seen:          set              = set()
+        merged:        List[dict]       = []
+        sources:       Dict[str, int]   = {}
+        source_errors: Dict[str, str]   = {}
 
         for cat, result in zip(search_cats, per_cat):
             if isinstance(result, Exception):
                 logger.warning("Category %r raised: %s", cat, result)
                 continue
-            jobs_list, src_counts = result
+            jobs_list, src_counts, src_errors = result
             for job in jobs_list:
                 url = job.get("job_url", "")
                 if url and url in seen:
@@ -143,10 +166,13 @@ async def run_search(
                 merged.append(job)
             for k, v in src_counts.items():
                 sources[k] = sources.get(k, 0) + v
+            for k, v in src_errors.items():
+                source_errors[k] = v   # last error per source wins
 
-        _tasks[task_id]["status"]  = "completed"
-        _tasks[task_id]["results"] = merged[:100]
-        _tasks[task_id]["sources"] = sources
+        _tasks[task_id]["status"]        = "completed"
+        _tasks[task_id]["results"]       = merged[:100]
+        _tasks[task_id]["sources"]       = sources
+        _tasks[task_id]["source_errors"] = source_errors
         logger.info("Done: %d jobs. Sources: %s", len(merged), sources)
 
     except Exception as exc:
@@ -163,71 +189,228 @@ async def _search_category(
     date_range: str,
     radius: int,
     remote: str,
-) -> Tuple[List[dict], Dict[str, int]]:
+) -> Tuple[List[dict], Dict[str, int], Dict[str, str]]:
     """
-    Run sources concurrently, gating non-location-aware sources appropriately.
+    Run sources concurrently, gating appropriately on location and remote preference.
+
+    Source gating logic:
+    - has_location AND remote == "no"  → location-aware sources only; remote-only
+      boards are skipped and any remote-tagged results are filtered out so the
+      user only sees jobs within their chosen city / radius.
+    - no location OR remote != "no"   → all sources run (remote boards contribute
+      keyword-matched results and act as a fallback when Indeed is blocked).
 
     Source behaviour:
-    - Indeed RSS        : fully location-aware (radius, city, state)
-    - The Muse          : location-aware (US-focused, passes location param)
-    - Remotive          : remote-only, no location filter
-    - RemoteOK          : remote-only, no location filter
-    - Jobicy            : remote-only JSON API (keyword + geo)
-    - We Work Remotely  : remote-only RSS (category-mapped feeds)
-    - Himalayas         : remote-first JSON API
-    - Arbeit Now        : European board — only when no location given
+    - JSearch (RapidAPI) : primary aggregator — Google Jobs, LinkedIn, Indeed,
+                           Glassdoor, ZipRecruiter. Only runs if JSEARCH_API_KEY set.
+    - Indeed RSS         : fully location-aware (radius, city, state)
+    - The Muse           : location-aware (US-focused, passes location param)
+    - Remotive           : remote-only source — skipped when remote == "no" + location
+    - RemoteOK           : remote-only source — skipped when remote == "no" + location
+    - Jobicy             : remote-only source — skipped when remote == "no" + location
+    - We Work Remotely   : remote-only source — skipped when remote == "no" + location
+    - Himalayas          : remote-only source — skipped when remote == "no" + location
+    - Arbeit Now         : European board — global catchall (no-location only)
 
-    Falls back to Google Jobs only if every active source returns 0.
+    Falls back to Google Jobs scraping when total results < 5.
     """
-    has_location = bool(location.strip())
-    wants_remote = remote in ("only", "include") or not has_location
+    has_location  = bool(location.strip())
+    # True when the user explicitly wants no remote jobs and supplied a location.
+    # In this mode we skip all remote-only boards and strip remote-tagged results.
+    strict_local  = has_location and remote == "no"
+    # Remote boards should run when: user wants remote, OR user wants both, OR no
+    # location was given (they act as keyword-based fallback in that case).
+    include_remote_sources = not strict_local
 
-    # Always-on: US-focused, location-aware boards
-    source_fns = {
-        "Indeed":   _scrape_indeed_rss(category, location, date_range, radius, remote),
-        "The Muse": _fetch_the_muse(category, location),
-    }
-    # Remote / global boards — only when user wants remote or no location set
-    if wants_remote:
-        source_fns["Remotive"]          = _fetch_remotive(category)
-        source_fns["RemoteOK"]          = _fetch_remote_ok(category)
-        source_fns["Jobicy"]            = _fetch_jobicy(category)
-        source_fns["We Work Remotely"]  = _fetch_wwr(category)
-        source_fns["Himalayas"]         = _fetch_himalayas(category)
-    # Arbeit Now is a European board — useful only as a no-location global catchall
+    # ── Always-on sources ─────────────────────────────────────────────────────
+    source_fns: Dict[str, any] = {}
+
+    # JSearch — primary real-time aggregator (requires JSEARCH_API_KEY in .env)
+    if settings.JSEARCH_API_KEY:
+        source_fns["JSearch"] = _fetch_jsearch(category, location, date_range, remote)
+
+    # Free location-aware boards (always run)
+    source_fns["Indeed"]   = _scrape_indeed_rss(category, location, date_range, radius, remote)
+    source_fns["The Muse"] = _fetch_the_muse(category, location)
+
+    # Remote/global boards — only run when the user hasn't restricted to local-only.
+    # When a location is given with remote == "no" these boards are skipped entirely
+    # because every result they return is tagged "Remote" and would be filtered anyway.
+    if include_remote_sources:
+        source_fns["Remotive"]         = _fetch_remotive(category)
+        source_fns["RemoteOK"]         = _fetch_remote_ok(category)
+        source_fns["Jobicy"]           = _fetch_jobicy(category)
+        source_fns["We Work Remotely"] = _fetch_wwr(category)
+        source_fns["Himalayas"]        = _fetch_himalayas(category)
+
+    # Arbeit Now: European board — global catchall (no-location searches only)
     if not has_location:
         source_fns["Arbeit Now"] = _fetch_arbeit_now(category, location)
 
     labels  = list(source_fns.keys())
     results = await asyncio.gather(*source_fns.values(), return_exceptions=True)
 
-    jobs:    List[dict]     = []
-    sources: Dict[str, int] = {}
-    seen:    set            = set()
+    jobs:          List[dict]     = []
+    sources:       Dict[str, int] = {}
+    source_errors: Dict[str, str] = {}
+    seen:          set            = set()
 
     for label, res in zip(labels, results):
         if isinstance(res, Exception):
             logger.warning("Source %r error: %s", label, res)
-            sources[label] = 0
+            sources[label]       = 0
+            source_errors[label] = str(res)
             continue
         sources[label] = len(res)
         logger.info("  %s → %d jobs", label, len(res))
         for job in res:
+            # ── Strict local filter ───────────────────────────────────────────
+            # When the user specified a location and chose no remote work type,
+            # drop any job whose location field looks like a remote-only posting.
+            if strict_local:
+                loc_val = (job.get("location") or "").strip().lower()
+                if loc_val in ("remote", "remote only", "worldwide", "anywhere") or \
+                        loc_val.startswith("remote"):
+                    continue
+            # ── Deduplication by URL ─────────────────────────────────────────
             url = job.get("job_url", "")
             if not url or url not in seen:
                 seen.add(url)
                 jobs.append(job)
 
-    # ── Google fallback only when all above are 0 ────────────────────────────
-    if not jobs:
-        logger.info("All sources returned 0 for %r — trying Google Jobs", category)
-        google = await _scrape_google_jobs(category, location, remote)
-        sources["Google Jobs"] = len(google)
-        jobs.extend(google)
-        if google:
-            logger.info("  Google Jobs → %d jobs", len(google))
+    # ── Google fallback when results are thin (< 5) ───────────────────────────
+    if len(jobs) < 5:
+        logger.info("Thin results (%d) for %r — trying Google Jobs fallback", len(jobs), category)
+        try:
+            google = await _scrape_google_jobs(category, location, remote)
+            sources["Google Jobs"] = len(google)
+            for job in google:
+                if strict_local:
+                    loc_val = (job.get("location") or "").strip().lower()
+                    if loc_val in ("remote", "remote only", "worldwide", "anywhere") or \
+                            loc_val.startswith("remote"):
+                        continue
+                url = job.get("job_url", "")
+                if not url or url not in seen:
+                    seen.add(url)
+                    jobs.append(job)
+            if google:
+                logger.info("  Google Jobs → %d jobs", len(google))
+        except Exception as exc:
+            logger.warning("Google Jobs fallback error: %s", exc)
+            sources["Google Jobs"]       = 0
+            source_errors["Google Jobs"] = str(exc)
 
-    return jobs, sources
+    return jobs, sources, source_errors
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Source 0 — JSearch (RapidAPI)  ★ PRIMARY real-time aggregator
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _fetch_jsearch(
+    category: str,
+    location: str,
+    date_range: str,
+    remote: str = "no",
+) -> List[dict]:
+    """
+    JSearch via RapidAPI — aggregates Google Jobs, LinkedIn, Indeed, Glassdoor,
+    and ZipRecruiter into a single call. Updates within hours of posting.
+
+    Docs: https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
+    Requires JSEARCH_API_KEY in .env  (get one free at rapidapi.com).
+    """
+    api_key = settings.JSEARCH_API_KEY
+    if not api_key:
+        return []
+
+    # Build natural-language query: "software engineer in New York" or "remote python developer"
+    if remote == "only":
+        query = f"remote {category}"
+    elif location.strip():
+        query = f"{category} in {location}"
+    else:
+        query = category
+
+    date_posted = _JSEARCH_DATE_MAP.get(str(date_range), "all")
+
+    params: dict = {
+        "query":       query,
+        "num_pages":   "2",          # up to 20 results per page → max 40
+        "date_posted": date_posted,
+    }
+    if remote == "only":
+        params["remote_jobs_only"] = "true"
+
+    headers = {
+        "X-RapidAPI-Key":  api_key,
+        "X-RapidAPI-Host": "jsearch.p.rapidapi.com",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(
+                "https://jsearch.p.rapidapi.com/search",
+                params=params,
+                headers=headers,
+            )
+            if r.status_code == 429:
+                logger.warning("JSearch: rate limit hit (429)")
+                return []
+            if r.status_code != 200:
+                logger.warning("JSearch: HTTP %d", r.status_code)
+                return []
+            data = r.json()
+
+        jobs: List[dict] = []
+        for j in data.get("data", []):
+            # Posted date
+            posted = "N/A"
+            raw_dt = j.get("job_posted_at_datetime_utc") or ""
+            if raw_dt:
+                try:
+                    posted = datetime.fromisoformat(raw_dt.replace("Z", "+00:00")).strftime("%b %d, %Y")
+                except Exception:
+                    posted = raw_dt[:10]
+
+            # Location
+            if j.get("job_is_remote"):
+                loc_str = "Remote"
+            else:
+                city  = j.get("job_city") or ""
+                state = j.get("job_state") or ""
+                country = j.get("job_country") or ""
+                loc_str = ", ".join(filter(None, [city, state])) or country or location or "N/A"
+
+            # Description — plain text, capped at 400 chars
+            desc_raw = j.get("job_description") or ""
+            desc = desc_raw[:400] if desc_raw else ""
+
+            title = (j.get("job_title") or "").strip()
+            company = (j.get("employer_name") or "N/A").strip()
+            job_url = j.get("job_apply_link") or j.get("job_google_link") or ""
+
+            if title:
+                jobs.append({
+                    "title":       title,
+                    "company":     company,
+                    "location":    loc_str,
+                    "posted_date": posted,
+                    "job_url":     job_url,
+                    "description": desc,
+                    "source":      "JSearch",
+                })
+
+        logger.info("JSearch → %d jobs for %r", len(jobs), query)
+        return jobs
+
+    except httpx.RequestError as e:
+        logger.debug("JSearch request error: %s", e)
+        return []
+    except Exception as e:
+        logger.warning("JSearch unexpected error: %s", e)
+        return []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -369,9 +552,12 @@ async def _fetch_the_muse(category: str, location: str = "") -> List[dict]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _fetch_remotive(category: str) -> List[dict]:
-    if not category:
-        return []
-    url = f"https://remotive.com/api/remote-jobs?search={quote_plus(category)}&limit=20"
+    # No category → fetch latest jobs (no keyword filter)
+    url = (
+        f"https://remotive.com/api/remote-jobs?search={quote_plus(category)}&limit=20"
+        if category else
+        "https://remotive.com/api/remote-jobs?limit=20"
+    )
     try:
         async with httpx.AsyncClient(headers=_JSON_HEADERS, follow_redirects=True, timeout=15) as c:
             r = await c.get(url)
@@ -401,10 +587,12 @@ async def _fetch_remotive(category: str) -> List[dict]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _fetch_remote_ok(category: str) -> List[dict]:
-    if not category:
-        return []
-    tag = category.lower().replace(" ", "-").replace("/", "-")
-    url = f"https://remoteok.io/api?tag={quote_plus(tag)}&limit=20"
+    # No category → fetch latest jobs from the base API (no tag filter)
+    if category:
+        tag = category.lower().replace(" ", "-").replace("/", "-")
+        url = f"https://remoteok.io/api?tag={quote_plus(tag)}&limit=20"
+    else:
+        url = "https://remoteok.io/api?limit=20"
     try:
         async with httpx.AsyncClient(
             headers={**_JSON_HEADERS, "Accept": "application/json"},
@@ -499,9 +687,12 @@ async def _fetch_jobicy(category: str) -> List[dict]:
     Jobicy public API — free JSON, no auth, remote-only jobs.
     https://jobicy.com/api/v2/remote-jobs?count=20&tag={query}
     """
-    if not category:
-        return []
-    url = f"https://jobicy.com/api/v2/remote-jobs?count=20&tag={quote_plus(category)}"
+    # No category → fetch latest jobs (omit tag param)
+    url = (
+        f"https://jobicy.com/api/v2/remote-jobs?count=20&tag={quote_plus(category)}"
+        if category else
+        "https://jobicy.com/api/v2/remote-jobs?count=20"
+    )
     try:
         async with httpx.AsyncClient(headers=_JSON_HEADERS, follow_redirects=True, timeout=15) as c:
             r = await c.get(url)
@@ -645,9 +836,12 @@ async def _fetch_himalayas(category: str) -> List[dict]:
     Himalayas public jobs API — free JSON, no auth, remote-first jobs.
     https://himalayas.app/jobs/api/search?q={query}&limit=20
     """
-    if not category:
-        return []
-    url = f"https://himalayas.app/jobs/api/search?q={quote_plus(category)}&limit=20"
+    # No category → fetch latest jobs (omit q param)
+    url = (
+        f"https://himalayas.app/jobs/api/search?q={quote_plus(category)}&limit=20"
+        if category else
+        "https://himalayas.app/jobs/api?limit=20"
+    )
     try:
         async with httpx.AsyncClient(headers=_JSON_HEADERS, follow_redirects=True, timeout=15) as c:
             r = await c.get(url)

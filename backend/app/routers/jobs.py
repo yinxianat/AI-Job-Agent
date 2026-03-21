@@ -1,8 +1,9 @@
 import asyncio
 import csv
 import io
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from fastapi.responses import Response
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -11,6 +12,8 @@ from ..models.job import Job
 from ..schemas.jobs import (
     JobSearchRequest, SearchTaskResponse, TaskStatusResponse,
     JobMatchRequest, JobMatchResponse, MatchedJobResult,
+    JobSuggestRequest, JobSuggestResponse,
+    ProfileSuggestResponse, ProfileCategorySuggestion,
 )
 from ..services import scraper_service, excel_service, claude_service
 from .auth import get_current_user
@@ -110,10 +113,12 @@ async def get_task_status(
             await db.commit()
 
     return TaskStatusResponse(
-        task_id = task_id,
-        status  = task["status"],
-        results = task.get("results"),
-        error   = task.get("error"),
+        task_id       = task_id,
+        status        = task["status"],
+        results       = task.get("results"),
+        error         = task.get("error"),
+        sources       = task.get("sources") or None,
+        source_errors = task.get("source_errors") or None,
     )
 
 
@@ -169,6 +174,108 @@ async def match_jobs(
             continue
 
     return JobMatchResponse(results=results)
+
+
+@router.post("/suggest-categories", response_model=JobSuggestResponse)
+async def suggest_categories(
+    payload:     JobSuggestRequest,
+    current_user = Depends(get_current_user),
+):
+    """
+    Given a user-typed job title / keyword, return AI-generated suggestions:
+    - family     : the job family / department
+    - titles     : 5-8 specific related job titles
+    - categories : 3-6 broader search categories for job boards
+    """
+    if not payload.input.strip():
+        return JobSuggestResponse()
+
+    result = await claude_service.suggest_job_categories(payload.input.strip())
+    return JobSuggestResponse(**result)
+
+
+@router.post("/suggest-from-profile", response_model=ProfileSuggestResponse)
+async def suggest_from_profile(
+    request: Request,
+    current_user = Depends(get_current_user),
+):
+    """
+    Analyse the candidate's uploaded resume(s) + profile data and return
+    ranked job category suggestions with match scores and reasons.
+
+    Uses raw request.form() so file handling matches the proven assessment endpoint pattern.
+    """
+    from ..services import resume_service
+    import logging
+    log = logging.getLogger(__name__)
+
+    debug_parts: list[str] = []
+
+    # Parse multipart form — same pattern as assessment_start which works
+    form  = await request.form()
+    items = list(form.multi_items())
+
+    def fget(key: str) -> str:
+        return next((str(v) for k, v in items if k == key and not isinstance(v, StarletteUploadFile)), "")
+
+    def ffiles(key: str):
+        return [v for k, v in items if k == key and isinstance(v, StarletteUploadFile) and (v.filename or "").strip()]
+
+    extra_skills = fget("extra_skills")
+    job_log      = fget("job_log")
+    wishes       = fget("wishes")
+    files        = ffiles("resume_files")
+
+    debug_parts.append(f"Received {len(files)} resume file(s)")
+
+    # Extract text from each uploaded resume file
+    resume_texts: list[str] = []
+    for f in files:
+        try:
+            content = await f.read()
+            fname = f.filename or "unknown"
+            debug_parts.append(f"Reading {fname} ({len(content)} bytes)")
+            text = resume_service.extract_resume_text(content, fname)
+            if text.strip():
+                resume_texts.append(text.strip())
+                debug_parts.append(f"Extracted {len(text.strip())} chars from {fname}")
+            else:
+                debug_parts.append(f"Empty text from {fname}")
+        except Exception as exc:
+            debug_parts.append(f"FAILED to extract from {f.filename}: {exc}")
+
+    has_skills = bool(extra_skills.strip())
+    has_log    = bool(job_log.strip())
+    has_wishes = bool(wishes.strip())
+    debug_parts.append(f"Profile data: {len(resume_texts)} resume(s), skills={has_skills}, log={has_log}, wishes={has_wishes}")
+
+    if not resume_texts and not has_skills and not has_log and not has_wishes:
+        return ProfileSuggestResponse(
+            suggestions=[],
+            error="No profile data available. Could not extract text from uploaded resumes and no skills/goals provided.",
+            debug_info=" | ".join(debug_parts),
+        )
+
+    try:
+        suggestions = await claude_service.suggest_categories_from_profile(
+            resume_texts = resume_texts,
+            extra_skills = extra_skills,
+            job_log      = job_log,
+            wishes       = wishes,
+        )
+        debug_parts.append(f"Claude returned {len(suggestions)} suggestions")
+
+        return ProfileSuggestResponse(
+            suggestions=[ProfileCategorySuggestion(**s) for s in suggestions],
+            debug_info=" | ".join(debug_parts),
+        )
+    except Exception as exc:
+        log.error("suggest-from-profile Claude error: %s", exc, exc_info=True)
+        return ProfileSuggestResponse(
+            suggestions=[],
+            error=f"AI analysis failed: {exc}",
+            debug_info=" | ".join(debug_parts),
+        )
 
 
 @router.post("/list-sheets")
