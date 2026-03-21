@@ -36,8 +36,8 @@ export default function App() {
               <Route path="/generate"       element={<ResumeGeneratorPage />} />
             </Route>
 
-            {/* Fallback */}
-            <Route path="*" element={<Navigate to="/" replace />} />
+            {/* Fallback — any unknown URL sends the user to login */}
+            <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
         </main>
         <Footer />
