@@ -11,9 +11,18 @@ Primary (always run when API key is set):
                           Glassdoor, ZipRecruiter. Most up-to-date source.
                           Requires JSEARCH_API_KEY in .env
 
+US Government jobs (always run when API key is set):
+  A. USAJOBS          — official US federal government jobs portal.
+                        Requires USAJOBS_API_KEY + USAJOBS_USER_AGENT in .env
+                        All results tagged: org_type="Government"
+
 Location-aware (always run):
   1. Indeed RSS       — stable XML feed, location + radius aware, US-focused
   2. The Muse         — free JSON API, professional/tech jobs, location-aware
+
+Direct company career boards (always run, no auth):
+  B. Greenhouse       — queries ~24 popular company boards in parallel, keyword filters
+  C. Lever            — queries ~20 popular company boards in parallel, keyword filters
 
 Remote / global (run only when remote wanted OR no location given):
   3. Remotive         — free JSON API, remote tech jobs only
@@ -31,6 +40,10 @@ Last-resort fallback (only when every source above returns 0):
                         returns [] gracefully on bot-detection
 
 Each job dict carries a "source" field so the UI can show provenance.
+Each job dict also carries enrichment fields:
+  - industry     : industry / sector (from API data or search category)
+  - org_type     : "Government" | "Non-Profit" | "For-Profit"
+  - company_size : "Large" (federal agencies) | None when unknown
 The task result includes a "sources" dict with per-source counts for debugging.
 """
 
@@ -118,6 +131,34 @@ _MUSE_CAT = {
 }
 
 
+# ── Org-type heuristic ────────────────────────────────────────────────────────
+_NONPROFIT_KEYWORDS = {
+    "nonprofit", "non-profit", "non profit", "foundation", "charitable",
+    "charity", "charities", "association", "institute", "ngo", "trust",
+    "society", "coalition", "alliance", "council", "federation", "league",
+    "fund", "endowment", "ministry", "church", "cathedral", "diocese",
+    "hospital", "health system", "clinic", "medical center",
+    "university", "college", "school district", "unified school",
+    "public library", "red cross", "united way",
+}
+
+def _infer_org_type(company: str, source: str = "") -> str:
+    """
+    Classify a company as Government, Non-Profit, or For-Profit.
+
+    - USAJOBS results are always Government.
+    - Checks company name against known non-profit keywords.
+    - Falls back to For-Profit.
+    """
+    if source == "USAJOBS":
+        return "Government"
+    name_lower = (company or "").lower()
+    for kw in _NONPROFIT_KEYWORDS:
+        if kw in name_lower:
+            return "Non-Profit"
+    return "For-Profit"
+
+
 # ── Public task API ────────────────────────────────────────────────────────────
 
 def create_task() -> str:
@@ -169,6 +210,20 @@ async def run_search(
             for k, v in src_errors.items():
                 source_errors[k] = v   # last error per source wins
 
+        # ── Enrich every job with org_type / company_size / industry ─────────
+        # Sources that already set these fields (e.g. JSearch, USAJOBS) keep
+        # their values.  All other sources get defaults derived from heuristics.
+        for job in merged:
+            if "org_type" not in job or not job["org_type"]:
+                job["org_type"] = _infer_org_type(
+                    job.get("company", ""), job.get("source", "")
+                )
+            if "company_size" not in job:
+                job["company_size"] = None
+            if "industry" not in job or not job["industry"]:
+                # Fall back to the search category so the tag is always populated
+                job["industry"] = job.get("search_category") or None
+
         _tasks[task_id]["status"]        = "completed"
         _tasks[task_id]["results"]       = merged[:100]
         _tasks[task_id]["sources"]       = sources
@@ -177,6 +232,164 @@ async def run_search(
 
     except Exception as exc:
         logger.error("run_search error: %s", exc, exc_info=True)
+        _tasks[task_id]["status"] = "failed"
+        _tasks[task_id]["error"]  = str(exc)
+
+
+# ── Company-targeted search ──────────────────────────────────────────────────
+
+async def run_company_search(
+    task_id: str,
+    companies: List[dict],
+    categories: List[str],
+    location: str = "",
+):
+    """
+    Search for jobs within specific companies via their Greenhouse / Lever boards.
+    Only queries boards for companies where a valid slug is provided.
+    """
+    _tasks[task_id]["status"] = "running"
+    try:
+        all_jobs:      List[dict]     = []
+        sources:       Dict[str, int] = {}
+        source_errors: Dict[str, str] = {}
+        seen:          set            = set()
+
+        gh_companies = [c for c in companies if c.get("greenhouse_slug")]
+        lv_companies = [c for c in companies if c.get("lever_slug")]
+
+        async with httpx.AsyncClient(
+            headers=_JSON_HEADERS, follow_redirects=True, timeout=15,
+        ) as client:
+            # Greenhouse queries
+            async def _gh_query(company: dict) -> List[dict]:
+                slug = company["greenhouse_slug"]
+                name = company.get("name", slug.replace("-", " ").title())
+                url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
+                params = {"content": "true"}
+                r = await client.get(url, params=params)
+                if r.status_code != 200:
+                    return []
+                data = r.json()
+                results = []
+                for j in data.get("jobs", []):
+                    title = (j.get("title") or "").strip()
+                    if not title:
+                        continue
+                    if categories and not _title_matches_category(title, " ".join(categories)):
+                        continue
+                    loc_obj = j.get("location") or {}
+                    job_loc = loc_obj.get("name", "") if isinstance(loc_obj, dict) else str(loc_obj)
+                    updated = j.get("updated_at") or ""
+                    posted = "N/A"
+                    if updated:
+                        try:
+                            posted = datetime.fromisoformat(updated[:19]).strftime("%b %d, %Y")
+                        except Exception:
+                            posted = updated[:10]
+                    desc_html = j.get("content") or ""
+                    desc = BeautifulSoup(desc_html, "lxml").get_text(" ", strip=True)[:400] if desc_html else ""
+                    depts = j.get("departments") or []
+                    industry = depts[0].get("name") if depts else company.get("industry")
+                    results.append({
+                        "title": title, "company": name,
+                        "location": job_loc or "N/A", "posted_date": posted,
+                        "job_url": j.get("absolute_url") or "",
+                        "description": desc, "source": "Greenhouse",
+                        "industry": industry,
+                        "org_type": _infer_org_type(name, "Greenhouse"),
+                        "company_size": None,
+                    })
+                return results
+
+            # Lever queries
+            async def _lv_query(company: dict) -> List[dict]:
+                slug = company["lever_slug"]
+                name = company.get("name", slug.replace("-", " ").title())
+                url = f"https://api.lever.co/v0/postings/{slug}"
+                r = await client.get(url, params={"mode": "json"})
+                if r.status_code != 200:
+                    return []
+                data = r.json()
+                if not isinstance(data, list):
+                    return []
+                results = []
+                for j in data:
+                    title = (j.get("text") or "").strip()
+                    if not title:
+                        continue
+                    if categories and not _title_matches_category(title, " ".join(categories)):
+                        continue
+                    cats = j.get("categories") or {}
+                    job_loc = cats.get("location") or ""
+                    created = j.get("createdAt")
+                    posted = "N/A"
+                    if created and isinstance(created, (int, float)):
+                        try:
+                            posted = datetime.fromtimestamp(created / 1000).strftime("%b %d, %Y")
+                        except Exception:
+                            pass
+                    desc_plain = (j.get("descriptionPlain") or "")[:400]
+                    if not desc_plain:
+                        desc_html = j.get("description") or ""
+                        desc_plain = BeautifulSoup(desc_html, "lxml").get_text(" ", strip=True)[:400] if desc_html else ""
+                    results.append({
+                        "title": title, "company": name,
+                        "location": job_loc or "N/A", "posted_date": posted,
+                        "job_url": j.get("hostedUrl") or j.get("applyUrl") or "",
+                        "description": desc_plain, "source": "Lever",
+                        "industry": cats.get("department") or company.get("industry"),
+                        "org_type": _infer_org_type(name, "Lever"),
+                        "company_size": None,
+                    })
+                return results
+
+            # Run all queries concurrently
+            all_tasks = (
+                [_gh_query(c) for c in gh_companies] +
+                [_lv_query(c) for c in lv_companies]
+            )
+            results = await asyncio.gather(*all_tasks, return_exceptions=True)
+
+        gh_count = 0
+        lv_count = 0
+        for i, res in enumerate(results):
+            if isinstance(res, Exception):
+                logger.warning("Company search error: %s", res)
+                continue
+            for job in res:
+                url = job.get("job_url", "")
+                if url and url in seen:
+                    continue
+                seen.add(url)
+                all_jobs.append(job)
+                if i < len(gh_companies):
+                    gh_count += 1
+                else:
+                    lv_count += 1
+
+        if gh_count:
+            sources["Greenhouse"] = gh_count
+        if lv_count:
+            sources["Lever"] = lv_count
+
+        # Enrich
+        for job in all_jobs:
+            if "org_type" not in job or not job["org_type"]:
+                job["org_type"] = _infer_org_type(job.get("company", ""), job.get("source", ""))
+            if "company_size" not in job:
+                job["company_size"] = None
+            if "industry" not in job or not job["industry"]:
+                job["industry"] = None
+
+        _tasks[task_id]["status"]        = "completed"
+        _tasks[task_id]["results"]       = all_jobs[:150]
+        _tasks[task_id]["sources"]       = sources
+        _tasks[task_id]["source_errors"] = source_errors
+        logger.info("Company search done: %d jobs. Sources: %s", len(all_jobs), sources)
+
+    except Exception as exc:
+        logger.error("run_company_search error: %s", exc, exc_info=True)
         _tasks[task_id]["status"] = "failed"
         _tasks[task_id]["error"]  = str(exc)
 
@@ -229,9 +442,18 @@ async def _search_category(
     if settings.JSEARCH_API_KEY:
         source_fns["JSearch"] = _fetch_jsearch(category, location, date_range, remote)
 
+    # USAJOBS — official US federal government jobs portal (requires API key)
+    if settings.USAJOBS_API_KEY and settings.USAJOBS_USER_AGENT:
+        source_fns["USAJOBS"] = _fetch_usajobs(category, location, date_range, remote)
+
     # Free location-aware boards (always run)
-    source_fns["Indeed"]   = _scrape_indeed_rss(category, location, date_range, radius, remote)
-    source_fns["The Muse"] = _fetch_the_muse(category, location)
+    source_fns["Indeed"]     = _scrape_indeed_rss(category, location, date_range, radius, remote)
+    source_fns["The Muse"]   = _fetch_the_muse(category, location)
+
+    # Direct company career boards — free, no auth, always run.
+    # These query curated lists of popular companies in parallel.
+    source_fns["Greenhouse"] = _fetch_greenhouse(category, location)
+    source_fns["Lever"]      = _fetch_lever(category, location)
 
     # Remote/global boards — only run when the user hasn't restricted to local-only.
     # When a location is given with remote == "no" these boards are skipped entirely
@@ -357,10 +579,15 @@ async def _fetch_jsearch(
             )
             if r.status_code == 429:
                 logger.warning("JSearch: rate limit hit (429)")
-                return []
+                raise RuntimeError("JSearch rate limit (429) — API quota may be exhausted")
+            if r.status_code == 403:
+                body = r.text[:200]
+                logger.warning("JSearch: 403 Forbidden — %s", body)
+                raise RuntimeError(f"JSearch 403 Forbidden — RapidAPI may be blocking this server IP. Response: {body}")
             if r.status_code != 200:
-                logger.warning("JSearch: HTTP %d", r.status_code)
-                return []
+                body = r.text[:200]
+                logger.warning("JSearch: HTTP %d — %s", r.status_code, body)
+                raise RuntimeError(f"JSearch HTTP {r.status_code}: {body}")
             data = r.json()
 
         jobs: List[dict] = []
@@ -391,26 +618,34 @@ async def _fetch_jsearch(
             company = (j.get("employer_name") or "N/A").strip()
             job_url = j.get("job_apply_link") or j.get("job_google_link") or ""
 
+            # Industry from employer_company_type (e.g. "Information Technology")
+            industry_raw = (j.get("employer_company_type") or "").strip()
+
             if title:
                 jobs.append({
-                    "title":       title,
-                    "company":     company,
-                    "location":    loc_str,
-                    "posted_date": posted,
-                    "job_url":     job_url,
-                    "description": desc,
-                    "source":      "JSearch",
+                    "title":        title,
+                    "company":      company,
+                    "location":     loc_str,
+                    "posted_date":  posted,
+                    "job_url":      job_url,
+                    "description":  desc,
+                    "source":       "JSearch",
+                    "industry":     industry_raw or None,
+                    "org_type":     _infer_org_type(company, "JSearch"),
+                    "company_size": None,
                 })
 
         logger.info("JSearch → %d jobs for %r", len(jobs), query)
         return jobs
 
     except httpx.RequestError as e:
-        logger.debug("JSearch request error: %s", e)
-        return []
+        logger.warning("JSearch request error: %s", e)
+        raise RuntimeError(f"JSearch network error: {e}")
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.warning("JSearch unexpected error: %s", e)
-        return []
+        raise RuntimeError(f"JSearch error: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -435,11 +670,17 @@ async def _scrape_indeed_rss(
         f"&radius={r_val}&fromage={date_range}&sort=date{r_flt}"
     )
     jobs: List[dict] = []
+    last_error = None
     async with httpx.AsyncClient(headers=_RSS_HEADERS, follow_redirects=True, timeout=25) as c:
         for start in range(0, 30, 10):
             try:
                 resp = await c.get(f"{base}&start={start}")
+                if resp.status_code == 403:
+                    last_error = f"Indeed returned 403 Forbidden — likely blocking this server's IP"
+                    logger.warning("Indeed RSS: 403 Forbidden (IP blocked?)")
+                    break
                 if resp.status_code != 200:
+                    last_error = f"Indeed HTTP {resp.status_code}"
                     break
                 page = _parse_indeed_rss(resp.text)
                 if not page:
@@ -449,8 +690,11 @@ async def _scrape_indeed_rss(
                     break
                 await asyncio.sleep(0.8)
             except httpx.RequestError as e:
-                logger.debug("Indeed RSS request error: %s", e)
+                last_error = f"Indeed network error: {e}"
+                logger.warning("Indeed RSS request error: %s", e)
                 break
+    if not jobs and last_error:
+        raise RuntimeError(last_error)
     return jobs
 
 
@@ -519,7 +763,7 @@ async def _fetch_the_muse(category: str, location: str = "") -> List[dict]:
         async with httpx.AsyncClient(headers=_JSON_HEADERS, follow_redirects=True, timeout=15) as c:
             r = await c.get(url)
             if r.status_code != 200:
-                return []
+                raise RuntimeError(f"The Muse HTTP {r.status_code}")
             data = r.json()
 
         jobs = []
@@ -543,8 +787,8 @@ async def _fetch_the_muse(category: str, location: str = "") -> List[dict]:
                              "description": desc, "source": "The Muse"})
         return jobs
     except Exception as e:
-        logger.debug("The Muse error: %s", e)
-        return []
+        logger.warning("The Muse error: %s", e)
+        raise RuntimeError(f"The Muse error: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -884,6 +1128,390 @@ async def _fetch_himalayas(category: str) -> List[dict]:
     except Exception as e:
         logger.debug("Himalayas error: %s", e)
         return []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Source B — Greenhouse Job Board API  (free, no auth, per-company boards)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Curated list of popular companies using Greenhouse.
+# Board tokens are the slug part of boards.greenhouse.io/{token}
+# Edit this list freely — add/remove companies to taste.
+_GREENHOUSE_BOARDS = [
+    "airbnb",          "cloudflare",      "figma",           "notion",
+    "discord",         "databricks",      "hashicorp",       "gitlab",
+    "snyk",            "cockroachlabs",   "brex",            "gusto",
+    "samsara",         "grammarly",       "airtable",        "doordash",
+    "twitch",          "instacart",       "stripe",          "lyft",
+    "okta",            "plaid",           "relativity",      "rivian",
+]
+
+
+def _title_matches_category(title: str, category: str) -> bool:
+    """Check whether a job title is relevant to the search category.
+
+    We split the category into keywords and require at least one to appear
+    in the title. Empty categories match everything (general search).
+    """
+    if not category:
+        return True
+    title_lower = title.lower()
+    keywords = [w for w in category.lower().split() if len(w) > 2]
+    return any(kw in title_lower for kw in keywords)
+
+
+async def _fetch_greenhouse(category: str, location: str) -> List[dict]:
+    """
+    Greenhouse Job Board API — public JSON, no auth required.
+    Queries multiple company boards concurrently and keyword-filters the results.
+
+    Endpoint: GET https://boards-api.greenhouse.io/v1/boards/{token}/jobs
+    Docs: https://developers.greenhouse.io/job-board.html
+    """
+
+    async def _query_board(client: httpx.AsyncClient, token: str) -> List[dict]:
+        """Fetch one company board and return matching jobs."""
+        url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs"
+        try:
+            r = await client.get(url, params={"content": "true"})
+            if r.status_code != 200:
+                return []
+            data = r.json()
+        except Exception:
+            return []
+
+        loc_lower = (location or "").lower()
+        results: List[dict] = []
+        for j in data.get("jobs", []):
+            title = (j.get("title") or "").strip()
+            if not title or not _title_matches_category(title, category):
+                continue
+
+            job_loc = ""
+            loc_obj = j.get("location") or {}
+            if isinstance(loc_obj, dict):
+                job_loc = (loc_obj.get("name") or "").strip()
+            elif isinstance(loc_obj, str):
+                job_loc = loc_obj.strip()
+
+            # If user specified a location, skip jobs that don't mention it
+            if loc_lower and job_loc:
+                if loc_lower not in job_loc.lower() and "remote" not in job_loc.lower():
+                    continue
+
+            # Posted date from updated_at
+            updated = j.get("updated_at") or ""
+            posted = "N/A"
+            if updated:
+                try:
+                    posted = datetime.fromisoformat(updated[:19]).strftime("%b %d, %Y")
+                except Exception:
+                    posted = updated[:10]
+
+            job_url = j.get("absolute_url") or ""
+
+            # Description (HTML) — strip tags, truncate
+            desc_html = j.get("content") or ""
+            desc = BeautifulSoup(desc_html, "lxml").get_text(" ", strip=True)[:400] if desc_html else ""
+
+            # Departments → industry
+            depts = j.get("departments") or []
+            industry = depts[0].get("name") if depts else None
+
+            company_name = token.replace("-", " ").title()
+
+            results.append({
+                "title":        title,
+                "company":      company_name,
+                "location":     job_loc or "N/A",
+                "posted_date":  posted,
+                "job_url":      job_url,
+                "description":  desc,
+                "source":       "Greenhouse",
+                "industry":     industry,
+                "org_type":     _infer_org_type(company_name, "Greenhouse"),
+                "company_size": None,
+            })
+        return results
+
+    try:
+        async with httpx.AsyncClient(
+            headers=_JSON_HEADERS, follow_redirects=True, timeout=12,
+        ) as client:
+            board_results = await asyncio.gather(
+                *[_query_board(client, token) for token in _GREENHOUSE_BOARDS],
+                return_exceptions=True,
+            )
+        jobs: List[dict] = []
+        for res in board_results:
+            if isinstance(res, list):
+                jobs.extend(res)
+        logger.info("Greenhouse → %d jobs for %r across %d boards",
+                     len(jobs), category, len(_GREENHOUSE_BOARDS))
+        return jobs[:25]
+    except Exception as e:
+        logger.warning("Greenhouse error: %s", e)
+        return []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Source C — Lever Postings API  (free, no auth, per-company boards)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Curated list of popular companies using Lever.
+# Slugs are the part of jobs.lever.co/{slug}
+_LEVER_COMPANIES = [
+    "netflix",         "twilio",          "postman",         "webflow",
+    "netlify",         "mux",             "flexport",        "benchling",
+    "anduril",         "vercel",          "upstart",         "nerdwallet",
+    "coursera",        "verkada",         "mashgin",         "palantir",
+    "reddit",          "mckinsey",        "robinhood",       "openai",
+]
+
+
+async def _fetch_lever(category: str, location: str) -> List[dict]:
+    """
+    Lever Postings API — public JSON, no auth required.
+    Queries multiple company slugs concurrently and keyword-filters the results.
+
+    Endpoint: GET https://api.lever.co/v0/postings/{slug}?mode=json
+    Docs: https://github.com/lever/postings-api
+    """
+
+    async def _query_company(client: httpx.AsyncClient, slug: str) -> List[dict]:
+        """Fetch one company's postings and return matching jobs."""
+        url = f"https://api.lever.co/v0/postings/{slug}"
+        try:
+            r = await client.get(url, params={"mode": "json"})
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            if not isinstance(data, list):
+                return []
+        except Exception:
+            return []
+
+        loc_lower = (location or "").lower()
+        results: List[dict] = []
+        for j in data:
+            title = (j.get("text") or "").strip()
+            if not title or not _title_matches_category(title, category):
+                continue
+
+            cats = j.get("categories") or {}
+            job_loc = (cats.get("location") or "").strip()
+
+            # Location filter
+            if loc_lower and job_loc:
+                if loc_lower not in job_loc.lower() and "remote" not in job_loc.lower():
+                    continue
+
+            # Lever stores createdAt as Unix timestamp in milliseconds
+            created = j.get("createdAt")
+            posted = "N/A"
+            if created and isinstance(created, (int, float)):
+                try:
+                    posted = datetime.fromtimestamp(created / 1000).strftime("%b %d, %Y")
+                except Exception:
+                    pass
+
+            job_url  = j.get("hostedUrl") or j.get("applyUrl") or ""
+
+            # Description
+            desc_plain = (j.get("descriptionPlain") or "").strip()
+            if not desc_plain:
+                desc_html = j.get("description") or ""
+                desc_plain = BeautifulSoup(desc_html, "lxml").get_text(" ", strip=True)[:400] if desc_html else ""
+            else:
+                desc_plain = desc_plain[:400]
+
+            # Industry from department/team categories
+            industry = cats.get("department") or cats.get("team") or None
+
+            company_name = slug.replace("-", " ").title()
+
+            results.append({
+                "title":        title,
+                "company":      company_name,
+                "location":     job_loc or "N/A",
+                "posted_date":  posted,
+                "job_url":      job_url,
+                "description":  desc_plain,
+                "source":       "Lever",
+                "industry":     industry,
+                "org_type":     _infer_org_type(company_name, "Lever"),
+                "company_size": None,
+            })
+        return results
+
+    try:
+        async with httpx.AsyncClient(
+            headers=_JSON_HEADERS, follow_redirects=True, timeout=12,
+        ) as client:
+            company_results = await asyncio.gather(
+                *[_query_company(client, slug) for slug in _LEVER_COMPANIES],
+                return_exceptions=True,
+            )
+        jobs: List[dict] = []
+        for res in company_results:
+            if isinstance(res, list):
+                jobs.extend(res)
+        logger.info("Lever → %d jobs for %r across %d companies",
+                     len(jobs), category, len(_LEVER_COMPANIES))
+        return jobs[:25]
+    except Exception as e:
+        logger.warning("Lever error: %s", e)
+        return []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Source A — USAJOBS  (official US federal government job board)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def _fetch_usajobs(
+    category: str,
+    location: str,
+    date_range: str,
+    remote: str = "no",
+) -> List[dict]:
+    """
+    USAJOBS official API — US federal government jobs.
+    Free to use; requires an API key from developer.usajobs.gov.
+
+    All results are tagged:
+      org_type     = "Government"
+      company_size = "Large"   (federal agencies are always large organisations)
+      industry     = derived from PositionSchedule / JobCategory
+
+    Docs: https://developer.usajobs.gov/api-reference/
+    Requires USAJOBS_API_KEY + USAJOBS_USER_AGENT (your email) in .env
+    """
+    api_key    = settings.USAJOBS_API_KEY
+    user_agent = settings.USAJOBS_USER_AGENT
+    if not api_key or not user_agent:
+        return []
+
+    params: dict = {
+        "Keyword":        category or "",
+        "ResultsPerPage": 25,
+    }
+    # DatePosted: USAJOBS accepts 1–60 days only. Cap larger ranges at 60.
+    try:
+        days = min(int(date_range), 60)
+        if days > 0:
+            params["DatePosted"] = days
+    except (ValueError, TypeError):
+        pass
+
+    # Location filter
+    if location.strip():
+        if remote == "only":
+            params["RemoteIndicator"] = "True"
+        else:
+            params["LocationName"] = location
+            if remote == "include":
+                params["RemoteIndicator"] = "True"
+    elif remote == "only":
+        params["RemoteIndicator"] = "True"
+
+    # NOTE: Do NOT set Host explicitly — httpx sets it automatically from the URL.
+    # USAJOBS requires User-Agent to be the registered email address.
+    headers = {
+        "User-Agent":        user_agent,
+        "Authorization-Key": api_key,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(
+                "https://data.usajobs.gov/api/search",
+                params=params,
+                headers=headers,
+            )
+            if r.status_code == 401:
+                raise RuntimeError("USAJOBS 401 Unauthorised — check USAJOBS_API_KEY and USAJOBS_USER_AGENT")
+            if r.status_code != 200:
+                raise RuntimeError(f"USAJOBS HTTP {r.status_code}: {r.text[:200]}")
+            data = r.json()
+
+        total = data.get("SearchResult", {}).get("SearchResultCount", "?")
+        logger.info("USAJOBS raw response: %s total hits for %r", total, category)
+
+        items = (
+            data.get("SearchResult", {})
+                .get("SearchResultItems", [])
+        )
+
+        jobs: List[dict] = []
+        for item in items:
+            d = item.get("MatchedObjectDescriptor", {})
+
+            title   = (d.get("PositionTitle") or "").strip()
+            if not title:
+                continue
+
+            # Organisation / department
+            org     = (d.get("OrganizationName") or d.get("DepartmentName") or "US Government").strip()
+
+            # Location — prefer first named location
+            locs    = d.get("PositionLocation") or []
+            if locs:
+                loc_str = locs[0].get("LocationName") or location or "USA"
+            else:
+                loc_str = "Remote" if d.get("RemoteIndicator") else (location or "USA")
+
+            # Posted date (PublicationStartDate: "2024-01-15")
+            pub_raw = d.get("PublicationStartDate") or ""
+            posted  = "N/A"
+            if pub_raw:
+                try:
+                    posted = datetime.fromisoformat(pub_raw[:10]).strftime("%b %d, %Y")
+                except Exception:
+                    posted = pub_raw[:10]
+
+            # Apply URL — first ApplyURI or PositionURI
+            apply_uris = d.get("ApplyURI") or []
+            job_url    = apply_uris[0] if apply_uris else (d.get("PositionURI") or "")
+
+            # Description — QualificationSummary or PositionFormattedDescription
+            desc = ""
+            qual = (d.get("QualificationSummary") or "").strip()
+            if qual:
+                desc = qual[:400]
+            else:
+                fmt_descs = d.get("PositionFormattedDescription") or []
+                if fmt_descs:
+                    raw_html = fmt_descs[0].get("Content") or ""
+                    desc = BeautifulSoup(raw_html, "lxml").get_text(" ", strip=True)[:400]
+
+            # Industry from JobCategory (e.g. "Information Technology Management")
+            cats = d.get("JobCategory") or []
+            industry = cats[0].get("Name") if cats else None
+
+            jobs.append({
+                "title":        title,
+                "company":      org,
+                "location":     loc_str,
+                "posted_date":  posted,
+                "job_url":      job_url,
+                "description":  desc,
+                "source":       "USAJOBS",
+                "industry":     industry,
+                "org_type":     "Government",
+                "company_size": "Large",
+            })
+
+        logger.info("USAJOBS → %d jobs for %r", len(jobs), category)
+        return jobs
+
+    except httpx.RequestError as e:
+        logger.warning("USAJOBS request error: %s", e)
+        raise RuntimeError(f"USAJOBS network error: {e}")
+    except RuntimeError:
+        raise
+    except Exception as e:
+        logger.warning("USAJOBS unexpected error: %s", e)
+        raise RuntimeError(f"USAJOBS error: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

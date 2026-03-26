@@ -787,3 +787,74 @@ async def suggest_categories_from_profile(
     except Exception as exc:
         log.error("suggest_categories_from_profile error: %s", exc, exc_info=True)
         raise  # Let the caller handle and report the error to the frontend
+
+
+# ── Company discovery ─────────────────────────────────────────────────────────
+
+DISCOVER_COMPANIES_PROMPT = """You are a local business research assistant. Given a location and radius, return a JSON array of notable companies that have offices or headquarters within that area.
+
+RULES:
+- Return 20-40 companies, prioritising larger employers and well-known tech/business companies
+- Include a MIX of company sizes: large enterprises, mid-size, and notable startups
+- Include companies from diverse industries: tech, finance, healthcare, retail, manufacturing, etc.
+- For each company provide:
+  - "name": exact legal/brand name (e.g. "Stripe" not "Stripe Inc")
+  - "website": main company website (e.g. "https://stripe.com")
+  - "career_url": direct link to their careers/jobs page (e.g. "https://stripe.com/jobs")
+  - "industry": short industry label (e.g. "Fintech", "Cloud Computing", "Healthcare")
+  - "greenhouse_slug": if you know they use Greenhouse for hiring, provide the board token (the slug in boards.greenhouse.io/{slug}). Otherwise null.
+  - "lever_slug": if you know they use Lever for hiring, provide the company slug (the slug in jobs.lever.co/{slug}). Otherwise null.
+
+For greenhouse_slug and lever_slug, ONLY provide values you are confident about. It is better to leave them null than guess wrong. Common known slugs:
+- Greenhouse: airbnb, cloudflare, figma, notion, discord, databricks, stripe, lyft, doordash, gitlab, hashicorp, snyk, brex, gusto, samsara, grammarly, airtable, instacart, plaid, okta, rivian, cockroachlabs, relativity, twitch
+- Lever: netflix, twilio, postman, webflow, netlify, anduril, vercel, upstart, nerdwallet, coursera, verkada, palantir, reddit, mckinsey, robinhood, openai, mux, flexport, benchling, mashgin
+
+CRITICAL: Output ONLY the raw JSON array. Start with [ and end with ]. No commentary."""
+
+
+async def discover_companies(location: str, radius: int = 25) -> List[Dict[str, Any]]:
+    """
+    Use Claude to discover notable companies near a location.
+    Returns a list of company dicts with name, website, career_url, industry,
+    and optional greenhouse_slug / lever_slug.
+    """
+    client = get_client()
+
+    user_msg = f"Find notable companies with offices within {radius} miles of {location}."
+
+    try:
+        resp = await client.messages.create(
+            model=settings.CLAUDE_MODEL,
+            max_tokens=4000,
+            system=DISCOVER_COMPANIES_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        raw = resp.content[0].text.strip()
+
+        # Strip markdown code fences if present
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            log.warning("discover_companies: expected list, got %s", type(data).__name__)
+            return []
+
+        companies = []
+        for c in data:
+            if not isinstance(c, dict) or not c.get("name"):
+                continue
+            companies.append({
+                "name":            str(c.get("name", "")).strip(),
+                "website":         str(c.get("website") or "").strip() or None,
+                "career_url":      str(c.get("career_url") or "").strip() or None,
+                "industry":        str(c.get("industry") or "").strip() or None,
+                "greenhouse_slug": str(c.get("greenhouse_slug") or "").strip() or None,
+                "lever_slug":      str(c.get("lever_slug") or "").strip() or None,
+            })
+        return companies
+
+    except Exception as exc:
+        log.error("discover_companies error: %s", exc, exc_info=True)
+        raise

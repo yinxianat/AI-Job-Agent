@@ -32,7 +32,9 @@ class Settings(BaseSettings):
     CLAUDE_MODEL: str = "claude-opus-4-6"
 
     # Job APIs
-    JSEARCH_API_KEY: str = ""   # RapidAPI key for JSearch (jsearch.p.rapidapi.com)
+    JSEARCH_API_KEY:  str = ""   # RapidAPI key for JSearch (jsearch.p.rapidapi.com)
+    USAJOBS_API_KEY:  str = ""   # USAJOBS API key from developer.usajobs.gov
+    USAJOBS_USER_AGENT: str = "" # Email address used when registering for USAJOBS API
 
     # Email
     SMTP_HOST: str = "smtp.gmail.com"

@@ -27,6 +27,10 @@ class JobResult(BaseModel):
     company_url:     Optional[str] = None
     description:     Optional[str] = None
     search_category: Optional[str] = None
+    # Enrichment tags — always populated after the search completes
+    industry:        Optional[str] = None   # e.g. "Information Technology", "Healthcare"
+    org_type:        Optional[str] = None   # "For-Profit" | "Non-Profit" | "Government"
+    company_size:    Optional[str] = None   # "Large" for federal agencies; None when unknown
 
 
 class SearchTaskResponse(BaseModel):
@@ -78,6 +82,32 @@ class ProfileSuggestResponse(BaseModel):
 
 
 # ── AI job matching ───────────────────────────────────────────────────────────
+
+# ── Company discovery ───────────────────────────────────────────────────────
+
+class DiscoverCompaniesRequest(BaseModel):
+    location: str
+    radius:   int = 25   # miles
+
+class DiscoveredCompany(BaseModel):
+    name:            str
+    website:         Optional[str] = None
+    career_url:      Optional[str] = None
+    industry:        Optional[str] = None
+    greenhouse_slug: Optional[str] = None   # non-null means has Greenhouse board
+    lever_slug:      Optional[str] = None   # non-null means has Lever board
+
+class DiscoverCompaniesResponse(BaseModel):
+    companies: List[DiscoveredCompany] = []
+    error:     Optional[str] = None
+
+
+class SearchByCompaniesRequest(BaseModel):
+    """Search for jobs within specific companies via Greenhouse/Lever boards."""
+    companies:  List[Dict[str, Any]]   # [{name, greenhouse_slug?, lever_slug?}]
+    categories: List[str] = []
+    location:   str = ""
+
 
 class JobMatchRequest(BaseModel):
     """

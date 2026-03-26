@@ -20,6 +20,7 @@ import {
   ChevronRightIcon, CheckIcon, Loader2Icon, PlusIcon, XIcon,
   StarIcon, BookmarkIcon, TableIcon, AlertCircleIcon,
   ClipboardListIcon, ChevronDownIcon, ChevronUpIcon,
+  BuildingIcon, GlobeIcon, ExternalLinkIcon,
 } from 'lucide-react'
 import api from '../services/api'
 import toast from 'react-hot-toast'
@@ -114,8 +115,18 @@ export default function ResumeGeneratorPage() {
   const [jobLogExpanded, setJobLogExpanded] = useState(false)
 
   // ── Step 2 state ──
-  const [step2Mode,    setStep2Mode]    = useState('upload')  // 'search' | 'upload'
+  const [step2Mode,    setStep2Mode]    = useState('upload')  // 'search' | 'upload' | 'companies'
   const [search,       setSearch]       = useState({ location: '', date_range: '7', radius: 25 })
+
+  // ── Company discovery state ──
+  const [companyLocation,    setCompanyLocation]    = useState('')
+  const [companyRadius,      setCompanyRadius]      = useState(25)
+  const [discoveredCompanies, setDiscoveredCompanies] = useState([])   // from AI
+  const [selectedCompanies,  setSelectedCompanies]  = useState(new Set())  // indices
+  const [discovering,        setDiscovering]        = useState(false)
+  const [companySearchCats,  setCompanySearchCats]  = useState([])
+  const [companyCustomCat,   setCompanyCustomCat]   = useState('')
+  const [companySearching,   setCompanySearching]   = useState(false)
   const [remoteTypes,  setRemoteTypes]  = useState([])   // [] = any (optional)
   const [searchCategories,  setSearchCategories]  = useState([])
   const [customCatInput,    setCustomCatInput]    = useState('')
@@ -1106,6 +1117,16 @@ export default function ResumeGeneratorPage() {
               >
                 <SearchIcon className="w-4 h-4" /> Search Jobs
               </button>
+              <button
+                type="button"
+                onClick={() => setStep2Mode('companies')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all
+                  ${step2Mode === 'companies'
+                    ? 'bg-white text-brand-700 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700 active:scale-95'}`}
+              >
+                <BuildingIcon className="w-4 h-4" /> Search by Company
+              </button>
             </div>
           )}
 
@@ -1921,8 +1942,263 @@ export default function ResumeGeneratorPage() {
           </div>
           )}  {/* end step2Mode === 'search' */}
 
+          {/* ══════════ Search by Company panel ══════════ */}
+          {step2Mode === 'companies' && (
+            <div className="space-y-4">
+              {/* Step A — Discover companies */}
+              <div className="card">
+                <div className="card-header">
+                  <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+                    <BuildingIcon className="w-4 h-4 text-brand-500" /> Discover Companies Near You
+                  </h2>
+                  <p className="text-xs text-gray-400 mt-1">AI will find notable companies in your area and check which ones have job boards on Greenhouse or Lever.</p>
+                </div>
+                <div className="card-body space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-semibold text-gray-600 mb-1">Location</label>
+                      <LocationAutocomplete
+                        value={companyLocation}
+                        onChange={setCompanyLocation}
+                        placeholder="City, state or zip"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 mb-1">Radius (miles)</label>
+                      <div className="flex flex-wrap gap-1">
+                        {[10, 25, 50, 100].map(r => (
+                          <button key={r} type="button"
+                            onClick={() => setCompanyRadius(r)}
+                            className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-all border
+                              ${companyRadius === r
+                                ? 'bg-brand-600 text-white border-brand-600'
+                                : 'bg-white text-gray-600 border-gray-200 hover:border-brand-300'}`}
+                          >{r}mi</button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button type="button"
+                    onClick={async () => {
+                      if (!companyLocation.trim()) { toast.error('Enter a location first'); return }
+                      setDiscovering(true)
+                      setDiscoveredCompanies([])
+                      setSelectedCompanies(new Set())
+                      try {
+                        const { data } = await api.post(API_ENDPOINTS.JOBS_DISCOVER_COMPANIES, {
+                          location: companyLocation, radius: companyRadius
+                        })
+                        const list = data.companies || []
+                        setDiscoveredCompanies(list)
+                        // Auto-select companies that have Greenhouse or Lever boards
+                        const autoSelect = new Set()
+                        list.forEach((c, i) => { if (c.greenhouse_slug || c.lever_slug) autoSelect.add(i) })
+                        setSelectedCompanies(autoSelect)
+                        if (list.length === 0) toast.error('No companies found for that area.')
+                        else toast.success(`Found ${list.length} companies!`)
+                      } catch (err) {
+                        toast.error(err.message || 'Failed to discover companies')
+                      } finally {
+                        setDiscovering(false)
+                      }
+                    }}
+                    disabled={discovering || !companyLocation.trim()}
+                    className="btn-primary w-full sm:w-auto flex items-center justify-center gap-2"
+                  >
+                    {discovering
+                      ? <><Loader2Icon className="w-4 h-4 animate-spin" /> Discovering…</>
+                      : <><SparklesIcon className="w-4 h-4" /> Discover Companies</>
+                    }
+                  </button>
+                </div>
+              </div>
+
+              {/* Company results list */}
+              {discoveredCompanies.length > 0 && (
+                <div className="card">
+                  <div className="card-header flex items-center justify-between">
+                    <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+                      <GlobeIcon className="w-4 h-4 text-brand-500" />
+                      {discoveredCompanies.length} Companies Found
+                      <span className="text-xs font-normal text-gray-400 ml-1">
+                        ({selectedCompanies.size} selected)
+                      </span>
+                    </h2>
+                    <button type="button"
+                      onClick={() => {
+                        if (selectedCompanies.size === discoveredCompanies.length) setSelectedCompanies(new Set())
+                        else setSelectedCompanies(new Set(discoveredCompanies.map((_, i) => i)))
+                      }}
+                      className="text-xs text-brand-600 hover:underline font-semibold">
+                      {selectedCompanies.size === discoveredCompanies.length ? 'Deselect all' : 'Select all'}
+                    </button>
+                  </div>
+                  <div className="divide-y divide-gray-50 max-h-96 overflow-y-auto">
+                    {discoveredCompanies.map((c, i) => (
+                      <label key={i}
+                        className={`flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors
+                          ${selectedCompanies.has(i) ? 'bg-brand-50/50' : 'hover:bg-gray-50'}`}>
+                        <input type="checkbox"
+                          checked={selectedCompanies.has(i)}
+                          onChange={() => setSelectedCompanies(prev => {
+                            const next = new Set(prev)
+                            next.has(i) ? next.delete(i) : next.add(i)
+                            return next
+                          })}
+                          className="w-4 h-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-sm text-gray-900">{c.name}</span>
+                            {c.industry && (
+                              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">{c.industry}</span>
+                            )}
+                            {c.greenhouse_slug && (
+                              <span className="text-xs bg-green-100 text-green-800 border border-green-300 px-2 py-0.5 rounded-full font-medium">
+                                Greenhouse
+                              </span>
+                            )}
+                            {c.lever_slug && (
+                              <span className="text-xs bg-fuchsia-100 text-fuchsia-800 border border-fuchsia-300 px-2 py-0.5 rounded-full font-medium">
+                                Lever
+                              </span>
+                            )}
+                            {!c.greenhouse_slug && !c.lever_slug && (
+                              <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Career page only</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
+                            {c.career_url && (
+                              <a href={c.career_url} target="_blank" rel="noopener noreferrer"
+                                onClick={e => e.stopPropagation()}
+                                className="text-brand-500 hover:underline flex items-center gap-1">
+                                <ExternalLinkIcon className="w-3 h-3" /> Careers
+                              </a>
+                            )}
+                            {c.website && (
+                              <a href={c.website} target="_blank" rel="noopener noreferrer"
+                                onClick={e => e.stopPropagation()}
+                                className="text-gray-400 hover:text-gray-600 hover:underline flex items-center gap-1">
+                                <GlobeIcon className="w-3 h-3" /> Website
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+
+                  {/* Step B — Category filter + search */}
+                  {selectedCompanies.size > 0 && (
+                    <div className="border-t border-gray-100 px-4 py-4 space-y-3 bg-gray-50/30">
+                      <p className="text-xs font-semibold text-gray-600">Filter by Job Category <span className="font-normal text-gray-400">(optional — leave empty for all jobs)</span></p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {PRESET_CATEGORIES.slice(0, 12).map(cat => (
+                          <button key={cat} type="button"
+                            onClick={() => setCompanySearchCats(prev =>
+                              prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]
+                            )}
+                            className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all border
+                              ${companySearchCats.includes(cat)
+                                ? 'bg-brand-600 text-white border-brand-600'
+                                : 'bg-white text-gray-600 border-gray-200 hover:border-brand-300'}`}
+                          >{cat}</button>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <input type="text" value={companyCustomCat}
+                          onChange={e => setCompanyCustomCat(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (companyCustomCat.trim()) { setCompanySearchCats(prev => [...prev, companyCustomCat.trim()]); setCompanyCustomCat('') } } }}
+                          placeholder="Add custom category…"
+                          className="input flex-1 text-sm" />
+                        <button type="button"
+                          onClick={() => { if (companyCustomCat.trim()) { setCompanySearchCats(prev => [...prev, companyCustomCat.trim()]); setCompanyCustomCat('') } }}
+                          className="btn-secondary text-xs px-3">
+                          <PlusIcon className="w-3 h-3" />
+                        </button>
+                      </div>
+                      {companySearchCats.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {companySearchCats.map(cat => (
+                            <span key={cat} className="inline-flex items-center gap-1 bg-brand-100 text-brand-700 text-xs font-medium px-2.5 py-1 rounded-full">
+                              {cat}
+                              <button type="button" onClick={() => setCompanySearchCats(prev => prev.filter(c => c !== cat))}
+                                className="hover:text-brand-900"><XIcon className="w-3 h-3" /></button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <button type="button"
+                        onClick={async () => {
+                          const selected = [...selectedCompanies].map(i => discoveredCompanies[i])
+                          const hasBoards = selected.filter(c => c.greenhouse_slug || c.lever_slug)
+                          if (hasBoards.length === 0) {
+                            toast.error('None of the selected companies have Greenhouse or Lever boards. Select companies with green or pink tags.')
+                            return
+                          }
+                          setCompanySearching(true)
+                          setJobs([])
+                          setSelectedJobs(new Set())
+                          setSearchStatus('running')
+                          setSearchSources(null)
+                          setSearchSourceErrors(null)
+                          clearInterval(pollRef.current)
+                          try {
+                            const { data } = await api.post(API_ENDPOINTS.JOBS_SEARCH_BY_COMPANIES, {
+                              companies: hasBoards.map(c => ({
+                                name: c.name, greenhouse_slug: c.greenhouse_slug, lever_slug: c.lever_slug, industry: c.industry
+                              })),
+                              categories: companySearchCats,
+                              location: companyLocation,
+                            })
+                            setSearchTaskId(data.task_id)
+                            pollRef.current = setInterval(async () => {
+                              try {
+                                const { data: t } = await api.get(API_ENDPOINTS.GENERATOR_TASK(data.task_id))
+                                setSearchStatus(t.status)
+                                if (t.status === 'completed') {
+                                  clearInterval(pollRef.current)
+                                  setCompanySearching(false)
+                                  const results = t.results || []
+                                  setJobs(results)
+                                  setJobsPage(0)
+                                  setSearchSources(t.sources || null)
+                                  setSearchSourceErrors(t.source_errors || null)
+                                  setSelectedJobs(new Set(results.map((_, i) => i)))
+                                  if (results.length === 0) toast.error('No matching jobs found at those companies.')
+                                  else toast.success(`Found ${results.length} jobs across ${hasBoards.length} companies!`)
+                                } else if (t.status === 'failed') {
+                                  clearInterval(pollRef.current)
+                                  setCompanySearching(false)
+                                  toast.error(t.error || 'Search failed')
+                                }
+                              } catch { clearInterval(pollRef.current); setCompanySearching(false) }
+                            }, SEARCH_POLL_INTERVAL_MS)
+                          } catch (err) {
+                            toast.error(err.message)
+                            setCompanySearching(false)
+                            setSearchStatus(null)
+                          }
+                        }}
+                        disabled={companySearching}
+                        className="btn-primary w-full flex items-center justify-center gap-2"
+                      >
+                        {companySearching
+                          ? <><Loader2Icon className="w-4 h-4 animate-spin" /> Searching company boards…</>
+                          : <><SearchIcon className="w-4 h-4" /> Search {selectedCompanies.size} Companies</>
+                        }
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {/* end step2Mode === 'companies' */}
+
           {/* ── 0 jobs found error panel ── */}
-          {searchStatus === 'completed' && jobs.length === 0 && step2Mode === 'search' && !searching && (
+          {searchStatus === 'completed' && jobs.length === 0 && (step2Mode === 'search' || step2Mode === 'companies') && !searching && !companySearching && (
             <div className="card border-red-200 bg-red-50">
               <div className="card-header flex items-center gap-2 pb-3">
                 <AlertCircleIcon className="w-5 h-5 text-red-500 shrink-0" />
@@ -1955,7 +2231,7 @@ export default function ResumeGeneratorPage() {
                           const err   = searchSourceErrors?.[src]
                           return (
                             <tr key={src} className="border-t border-red-100 even:bg-red-50/40">
-                              <td className="px-3 py-2 font-medium text-gray-700">{src}</td>
+                              <td className="px-3 py-2 font-medium text-gray-700">{src === 'USAJOBS' ? 'US Government Jobs' : src}</td>
                               <td className="px-3 py-2 text-center">
                                 {count != null
                                   ? <span className={`inline-block px-2 py-0.5 rounded-full font-semibold ${count > 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{count}</span>
@@ -1981,6 +2257,28 @@ export default function ResumeGeneratorPage() {
             const jobsPageStart   = jobsPage * JOBS_PAGE_SIZE
             const jobsPageEnd     = Math.min(jobsPageStart + JOBS_PAGE_SIZE, jobs.length)
             const visibleJobs     = jobs.slice(jobsPageStart, jobsPageEnd)
+
+            // Source colour map for badges
+            const sourceColours = {
+              'USAJOBS':          'bg-emerald-100 text-emerald-800 border-emerald-300',
+              'JSearch':          'bg-sky-100 text-sky-800 border-sky-300',
+              'Indeed':           'bg-indigo-100 text-indigo-800 border-indigo-300',
+              'The Muse':         'bg-violet-100 text-violet-800 border-violet-300',
+              'Remotive':         'bg-teal-100 text-teal-800 border-teal-300',
+              'RemoteOK':         'bg-cyan-100 text-cyan-800 border-cyan-300',
+              'Jobicy':           'bg-lime-100 text-lime-800 border-lime-300',
+              'We Work Remotely': 'bg-amber-100 text-amber-800 border-amber-300',
+              'Himalayas':        'bg-rose-100 text-rose-800 border-rose-300',
+              'Arbeit Now':       'bg-orange-100 text-orange-800 border-orange-300',
+              'Google Jobs':      'bg-blue-100 text-blue-800 border-blue-300',
+              'Greenhouse':       'bg-green-100 text-green-800 border-green-300',
+              'Lever':            'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300',
+            }
+            const defaultSourceColour = 'bg-gray-100 text-gray-700 border-gray-300'
+
+            // Friendly display name for sources
+            const sourceDisplayName = (src) => src === 'USAJOBS' ? 'US Government Jobs' : src
+
             return (
               <div className="card">
                 {/* Header */}
@@ -1996,6 +2294,24 @@ export default function ResumeGeneratorPage() {
                     {selectedJobs.size === jobs.length ? 'Deselect all' : 'Select all'}
                   </button>
                 </div>
+
+                {/* Per-source result counts summary */}
+                {searchSources && Object.keys(searchSources).length > 0 && (
+                  <div className="px-5 py-3 border-b border-gray-100 bg-gray-50/60" data-testid="source-summary">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Results by Source</p>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(searchSources)
+                        .sort(([,a], [,b]) => b - a)
+                        .map(([src, count]) => (
+                          <span key={src}
+                            className={`inline-flex items-center gap-1.5 text-xs font-medium border px-2.5 py-1 rounded-full ${sourceColours[src] || defaultSourceColour}`}>
+                            {sourceDisplayName(src)}
+                            <span className="inline-flex items-center justify-center bg-white/60 text-[10px] font-bold rounded-full w-5 h-5">{count}</span>
+                          </span>
+                        ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Job rows — current page only */}
                 <div className="divide-y divide-gray-100">
@@ -2013,6 +2329,12 @@ export default function ResumeGeneratorPage() {
                             {job.source === 'spreadsheet' && (
                               <span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full font-medium shrink-0 flex items-center gap-1">
                                 <TableIcon className="w-3 h-3" /> Spreadsheet
+                              </span>
+                            )}
+                            {job.source && job.source !== 'spreadsheet' && (
+                              <span className={`text-xs border px-2 py-0.5 rounded-full font-medium shrink-0 ${sourceColours[job.source] || defaultSourceColour}`}
+                                data-testid="job-source-badge">
+                                {sourceDisplayName(job.source)}
                               </span>
                             )}
                             {job.search_category && job.source !== 'spreadsheet' && (
@@ -2033,6 +2355,34 @@ export default function ResumeGeneratorPage() {
                               </a>
                             )}
                           </div>
+                          {/* Enrichment tags — industry, org type, company size */}
+                          {(job.industry || job.org_type || job.company_size) && (
+                            <div className="flex gap-1.5 mt-1.5 flex-wrap">
+                              {job.industry && (
+                                <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full font-medium shrink-0">
+                                  {job.industry}
+                                </span>
+                              )}
+                              {job.org_type && (() => {
+                                const colours = {
+                                  'Government':  'bg-green-50 text-green-700 border-green-200',
+                                  'Non-Profit':  'bg-amber-50 text-amber-700 border-amber-200',
+                                  'For-Profit':  'bg-gray-50 text-gray-600 border-gray-200',
+                                }
+                                const cls = colours[job.org_type] || 'bg-gray-50 text-gray-600 border-gray-200'
+                                return (
+                                  <span className={`text-xs border px-2 py-0.5 rounded-full font-medium shrink-0 ${cls}`}>
+                                    {job.org_type}
+                                  </span>
+                                )
+                              })()}
+                              {job.company_size && (
+                                <span className="text-xs bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full font-medium shrink-0">
+                                  {job.company_size}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                         {selectedJobs.has(i) && <CheckCircleIcon className="w-4 h-4 text-brand-500 shrink-0 mt-1" />}
                       </label>

@@ -14,6 +14,8 @@ from ..schemas.jobs import (
     JobMatchRequest, JobMatchResponse, MatchedJobResult,
     JobSuggestRequest, JobSuggestResponse,
     ProfileSuggestResponse, ProfileCategorySuggestion,
+    DiscoverCompaniesRequest, DiscoverCompaniesResponse,
+    SearchByCompaniesRequest,
 )
 from ..services import scraper_service, excel_service, claude_service
 from .auth import get_current_user
@@ -376,3 +378,132 @@ async def parse_spreadsheet(
         raise HTTPException(status_code=422, detail="No jobs found in the spreadsheet. Check that rows have a Job Title.")
 
     return {"jobs": jobs, "count": len(jobs)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Company discovery  —  AI-powered company finder + Greenhouse / Lever check
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/discover-companies")
+async def discover_companies(
+    payload:      DiscoverCompaniesRequest,
+    current_user = Depends(get_current_user),
+):
+    """
+    Use Claude AI to find notable companies near a location, then verify
+    which ones have public Greenhouse or Lever job boards.
+    """
+    import httpx
+    import logging
+    log = logging.getLogger(__name__)
+
+    # Step 1 — ask Claude for companies in the area
+    try:
+        companies = await claude_service.discover_companies(
+            payload.location, payload.radius,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"AI error: {exc}")
+
+    if not companies:
+        return DiscoverCompaniesResponse(companies=[], error="No companies found for that location.")
+
+    # Step 2 — verify Greenhouse / Lever boards concurrently.
+    # For each company that Claude suggested a slug, check if the board actually exists.
+    # Also try to discover boards for companies that Claude didn't provide a slug for
+    # by trying the normalised company name as a slug.
+
+    async def _check_greenhouse(client: httpx.AsyncClient, company: dict) -> dict:
+        """Check if a Greenhouse board exists. Returns updated company dict."""
+        slug = company.get("greenhouse_slug")
+        # If Claude didn't provide a slug, try the normalised company name
+        if not slug:
+            slug = company["name"].lower().replace(" ", "").replace(".", "").replace(",", "")
+        url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
+        try:
+            r = await client.get(url, timeout=6)
+            if r.status_code == 200:
+                data = r.json()
+                job_count = data.get("meta", {}).get("total", len(data.get("jobs", [])))
+                if job_count > 0:
+                    company["greenhouse_slug"] = slug
+                    company["greenhouse_jobs"] = job_count
+                    return company
+        except Exception:
+            pass
+        company["greenhouse_slug"] = None
+        company["greenhouse_jobs"] = 0
+        return company
+
+    async def _check_lever(client: httpx.AsyncClient, company: dict) -> dict:
+        """Check if a Lever board exists. Returns updated company dict."""
+        slug = company.get("lever_slug")
+        if not slug:
+            slug = company["name"].lower().replace(" ", "").replace(".", "").replace(",", "")
+        url = f"https://api.lever.co/v0/postings/{slug}?mode=json&limit=1"
+        try:
+            r = await client.get(url, timeout=6)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list) and len(data) > 0:
+                    company["lever_slug"] = slug
+                    company["lever_jobs"] = len(data)   # only 1 due to limit, but confirms existence
+                    return company
+        except Exception:
+            pass
+        company["lever_slug"] = None
+        company["lever_jobs"] = 0
+        return company
+
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        # Run all checks concurrently
+        gh_tasks = [_check_greenhouse(client, c.copy()) for c in companies]
+        lv_tasks = [_check_lever(client, c.copy()) for c in companies]
+        gh_results = await asyncio.gather(*gh_tasks, return_exceptions=True)
+        lv_results = await asyncio.gather(*lv_tasks, return_exceptions=True)
+
+    # Merge Greenhouse and Lever results back into companies
+    enriched = []
+    for i, company in enumerate(companies):
+        gh = gh_results[i] if not isinstance(gh_results[i], Exception) else {}
+        lv = lv_results[i] if not isinstance(lv_results[i], Exception) else {}
+
+        enriched.append({
+            "name":            company["name"],
+            "website":         company.get("website"),
+            "career_url":      company.get("career_url"),
+            "industry":        company.get("industry"),
+            "greenhouse_slug": gh.get("greenhouse_slug") if isinstance(gh, dict) else None,
+            "greenhouse_jobs": gh.get("greenhouse_jobs", 0) if isinstance(gh, dict) else 0,
+            "lever_slug":      lv.get("lever_slug") if isinstance(lv, dict) else None,
+            "lever_jobs":      lv.get("lever_jobs", 0) if isinstance(lv, dict) else 0,
+        })
+
+    return {"companies": enriched}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Search by companies  —  fetch jobs from selected company Greenhouse / Lever boards
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/search-by-companies", response_model=SearchTaskResponse)
+async def search_by_companies(
+    payload:     SearchByCompaniesRequest,
+    background:  BackgroundTasks,
+    current_user = Depends(get_current_user),
+):
+    """
+    Search for jobs within specific companies via their Greenhouse / Lever boards.
+    Returns a task_id that can be polled via GET /api/jobs/task/{task_id}.
+    """
+    task_id = scraper_service.create_task()
+
+    background.add_task(
+        scraper_service.run_company_search,
+        task_id,
+        payload.companies,
+        payload.categories,
+        payload.location,
+    )
+
+    return SearchTaskResponse(task_id=task_id, status="running")

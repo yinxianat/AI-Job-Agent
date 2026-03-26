@@ -16,6 +16,8 @@ export const API_ENDPOINTS = {
   JOBS_EXPORT:            (taskId) => `/api/jobs/export/${taskId}`,
   JOBS_SUGGEST_CATEGORIES: '/api/jobs/suggest-categories',
   JOBS_SUGGEST_FROM_PROFILE: '/api/jobs/suggest-from-profile',
+  JOBS_DISCOVER_COMPANIES:   '/api/jobs/discover-companies',
+  JOBS_SEARCH_BY_COMPANIES:  '/api/jobs/search-by-companies',
 
   // Resume tailor
   RESUME_TAILOR:        '/api/resume/tailor',

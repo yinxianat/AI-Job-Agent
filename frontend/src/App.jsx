@@ -3,6 +3,7 @@ import { AuthProvider } from './contexts/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Navbar from './components/Navbar'
 import Footer from './components/Footer'
+import SessionTimeoutModal from './components/SessionTimeoutModal'
 
 import HomePage            from './pages/HomePage'
 import LoginPage           from './pages/LoginPage'
@@ -17,6 +18,9 @@ import ContactPage         from './pages/ContactPage'
 export default function App() {
   return (
     <AuthProvider>
+      {/* Session-timeout modal — rendered above everything else in the stacking context */}
+      <SessionTimeoutModal />
+
       <div className="min-h-screen flex flex-col">
         <Navbar />
         <main className="flex-1">
